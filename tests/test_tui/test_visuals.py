@@ -85,12 +85,15 @@ class TestMonthLabels:
 class TestBarGlyphs:
     def test_fraction_renders_partial_blocks(self) -> None:
         assert widgets.bar_glyphs(1.0, 4) == "████"
-        assert widgets.bar_glyphs(0.0, 4) == "░░░░"
-        assert widgets.bar_glyphs(0.5, 4) == "██░░"
+        # an unfilled bar carries no shade pattern: the track is empty space
+        # so transparency in the terminal is respected and no third colour
+        # appears — colour belongs to the used portion only
+        assert widgets.bar_glyphs(0.0, 4) == "    "
+        assert widgets.bar_glyphs(0.5, 4) == "██  "
         assert widgets.bar_glyphs(0.53125, 2) == "█▏"  # 8.5/16 units → full + 1/8 partial
-        assert widgets.bar_glyphs(None, 3) == "░░░"
+        assert widgets.bar_glyphs(None, 3) == "   "
         assert widgets.bar_glyphs(1.5, 2) == "██"  # clips
-        assert widgets.bar_glyphs(-0.5, 2) == "░░"
+        assert widgets.bar_glyphs(-0.5, 2) == "  "
 
     def test_partial_block_fills_from_the_left(self) -> None:
         # a horizontal bar must not use the bottom-anchored ladder: that

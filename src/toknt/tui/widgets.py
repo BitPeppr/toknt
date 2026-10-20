@@ -334,18 +334,21 @@ def _covering(
 
 
 def bar_glyphs(fraction: float | None, width: int) -> str:
-    """An inline share/rate bar: '█████▋░░░░' with 1/8-cell partial blocks.
+    """An inline share/rate bar: '█████▋    ' — colour only on the used part.
 
-    ``None`` (no data) renders as an empty bar; fractions clip to [0, 1].
-    The partial cell fills from the *left* (``_BAR_PARTIALS``): the
-    bottom-anchored ladder (``_BLOCK_GLYPHS``) belongs to stacked columns,
-    where each text row is a vertical slice — in a horizontal bar it would
-    read as a stray character rather than as part of the fill.
+    The unused portion is unpainted space: halftone shade characters (``░``)
+    puddle into noise over a transparent terminal background and read as a
+    third colour elsewhere. ``None`` (no data) renders as an empty bar;
+    fractions clip to [0, 1]. The partial cell fills from the *left*
+    (``_BAR_PARTIALS``): the bottom-anchored ladder (``_BLOCK_GLYPHS``)
+    belongs to stacked columns, where each text row is a vertical slice —
+    in a horizontal bar it would read as a stray character rather than as
+    part of the fill.
     """
     if width <= 0:
         return ""
     if fraction is None:
-        return "░" * width
+        return " " * width
     fraction = max(0.0, min(1.0, float(fraction)))
     units = fraction * width * 8
     full = int(units // 8)
@@ -356,7 +359,7 @@ def bar_glyphs(fraction: float | None, width: int) -> str:
     glyphs = "█" * full
     if remainder:
         glyphs += _BAR_PARTIALS[remainder - 1]
-    glyphs += "░" * max(width - len(glyphs), 0)
+    glyphs += " " * max(width - len(glyphs), 0)
     return glyphs
 
 
