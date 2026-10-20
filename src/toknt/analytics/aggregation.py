@@ -214,7 +214,7 @@ def fetch_usage_rows(conn: sqlite3.Connection, flt: UsageFilter) -> list[UsageRo
         "SELECT ts_ms, agent, model, project, session_id, token_scheme, "
         "input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, "
         "cache_write_tokens, cost_reported FROM usage_events "
-        f"{where} ORDER BY ts_ms"
+        f"{where} ORDER BY ts_ms, rowid"
     )
     rows = []
     for row in conn.execute(sql, params):
@@ -303,7 +303,7 @@ class Series:
     """One value per (key, bucket); ``None`` marks a bucket without data."""
 
     buckets: tuple[int, ...]
-    series: Mapping[str, tuple[int | None, ...]]
+    series: Mapping[str, tuple[int | float | None, ...]]
     dimension: str
     bucket: str = "day"
 
@@ -393,10 +393,10 @@ def usage_series(
 
 def cumulative(series: Series) -> Series:
     """Running totals over a series; buckets before the first value stay None."""
-    result: dict[str, tuple[int | None, ...]] = {}
+    result: dict[str, tuple[int | float | None, ...]] = {}
     for key, values in series.series.items():
         running: int | None = None
-        out: list[int | None] = []
+        out: list[int | float | None] = []
         for value in values:
             if value is not None:
                 running = (running or 0) + value
@@ -432,11 +432,15 @@ def rate_points(rows: Sequence[UsageRow]) -> list[RatePoint]:
     tokens are output + reasoning: prompt handling is not what a rate
     measures. An event reporting neither kind is skipped, which lets the
     next gap span it; a session's first event has no predecessor. Gaps are
-    per ``(agent, session)`` — agents never share a session namespace.
+    per ``(agent, session)`` — agents never share a session namespace. An
+    event without session attribution has no conversation to pair within
+    and drops out of every rate.
     """
     points: list[RatePoint] = []
-    previous: dict[tuple[str, str | None], int] = {}
+    previous: dict[tuple[str, str], int] = {}
     for row in rows:
+        if not row.session_id:
+            continue  # unattributed: no session boundary, no predecessor, no rate
         output = metric_value(row, "output")
         reasoning = metric_value(row, "reasoning")
         if output is None and reasoning is None:

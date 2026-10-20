@@ -483,6 +483,49 @@ class TestGenerationRate:
         rates = aggregation.model_rate_totals(conn, aggregation.UsageFilter())
         assert rates == {}  # zero-length gap is not a rate
 
+    def test_events_without_a_session_never_pair(self, conn: sqlite3.Connection) -> None:
+        # an adapter that cannot attribute a session leaves the event
+        # unpaired: chaining those events would invent a conversation out
+        # of unrelated requests
+        base = at(2026, 1, 5, 10, 0)
+        seed(
+            conn,
+            [
+                usage(id="u1", ts_ms=base, session_id=None),
+                usage(
+                    id="u2",
+                    ts_ms=base + 10_000,
+                    session_id=None,
+                    output=120,
+                    reasoning=0,
+                ),
+            ],
+        )
+        rates = aggregation.model_rate_totals(conn, aggregation.UsageFilter())
+        assert rates == {}  # no session boundary: no predecessor, no rate
+
+    def test_sessionless_events_neither_pair_nor_disturb(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        base = at(2026, 1, 5, 10, 0)
+        seed(
+            conn,
+            [
+                usage(id="u1", ts_ms=base, session_id="s1"),
+                usage(id="u2", ts_ms=base + 10_000, session_id=None, output=999),
+                usage(
+                    id="u3",
+                    ts_ms=base + 60_000,
+                    session_id="s1",
+                    output=120,
+                    reasoning=0,
+                ),
+            ],
+        )
+        rates = aggregation.model_rate_totals(conn, aggregation.UsageFilter())
+        # the sessionless event is invisible: the gap runs u1 → u3 (60 s)
+        assert rates == {"model-a": pytest.approx(2.0)}
+
     def test_series_buckets_pair_gaps_per_day(self, conn: sqlite3.Connection) -> None:
         seed(
             conn,

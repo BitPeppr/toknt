@@ -137,14 +137,15 @@ generated tokens count — prompt handling (input and cache) is not part of a
 model's output speed. The pairing excludes a session's first message, gaps
 longer than five minutes (a person's lunch is not model slowness), and
 messages that report neither output nor reasoning, so those events hand
-their predecessor's gap to whoever follows. In the weighting, a slow message
-biases its day more than a fast burst, which matches what the wall clock
-actually spent. Expect ±10–25% accuracy on tool-free generation bursts and
-a systematic under-count on turns dominated by long tool runs — treat the
-comparisons between models and the trends over time as the meaningful part,
-not any single number as gospel. In interactive mode the estimate lives
-behind `p` on the models view (chart) and the table's `≈tok/s` column; on
-the command line it is `toknt models --tps`.
+their predecessor's gap to whoever follows. Events without session
+attribution have no conversation to pair within and drop out of every rate.
+In the weighting, a slow message biases its day more than a fast burst,
+which matches what the wall clock actually spent. Expect ±10–25% accuracy on
+tool-free generation bursts and a systematic under-count on turns dominated
+by long tool runs — treat the comparisons between models and the trends over
+time as the meaningful part, not any single number as gospel. In interactive mode
+the estimate lives behind `p` on the models view (chart) and the table's
+`≈tok/s` column; on the command line it is `toknt models --tps`.
 
 ### Merging models across providers
 
