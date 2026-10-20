@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from tests.support.models import at, tool, usage
-from toknt.analytics import aggregation
+from toknt.analytics import aggregation, model_names
 from toknt.analytics.model_names import CanonicalName
 from toknt.models.events import SessionRecord
 from toknt.models.usage import TokenScheme
@@ -579,6 +579,39 @@ class TestGenerationRate:
         )
         assert set(series.series) == {"model-b"}
         assert series.series["model-b"][0] == pytest.approx(5.0)  # 150 gen / 30 s
+
+    def test_merged_rates_join_on_the_identity_not_the_label(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        # a merged model's label is what the user reads ("muse-spark-1.3"),
+        # its identity is the join key ("muse-spark-1-3"): the two differ,
+        # so a rate looked up by the label silently finds nothing
+        base = at(2026, 1, 5, 10, 0)
+        seed(
+            conn,
+            [
+                usage(id="u1", ts_ms=base, model="muse-spark-1.3-contributor-free"),
+                usage(
+                    id="u2",
+                    ts_ms=base + 10_000,
+                    model="muse-spark-1.3-contributor-free",
+                    output=120,
+                    reasoning=0,
+                ),
+            ],
+        )
+        canonical = model_names.canonical_model
+        rows = aggregation.usage_breakdown(
+            conn, aggregation.UsageFilter(), canonical=canonical
+        )
+        rates = aggregation.model_rate_totals(
+            conn, aggregation.UsageFilter(), canonical=canonical
+        )
+        row = next(item for item in rows if item.key.startswith("muse-spark"))
+        assert row.key == "muse-spark-1.3"  # the label
+        assert row.identity == "muse-spark-1-3"  # the join key
+        assert row.key not in rates  # the label never joins
+        assert rates[row.identity] == pytest.approx(12.0)
 
     def test_top_n_folds_the_tail_into_other(self, conn: sqlite3.Connection) -> None:
         events = []

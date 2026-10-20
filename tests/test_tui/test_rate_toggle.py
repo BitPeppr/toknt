@@ -86,6 +86,39 @@ def _rate_pair(seeded_conn) -> None:
     )
 
 
+def _decorated_pair(seeded_conn) -> None:
+    """A pair whose model name merges: the label ('muse-spark-1.3') and the
+    identity ('muse-spark-1-3') are different strings."""
+    base = at(2026, 10, 10, 12, 0)
+    ingestion.upsert_usage_events(
+        seeded_conn,
+        [
+            usage(
+                id="usage:opencode:rate-merge-1",
+                ts_ms=base,
+                session_id="ses_rate_merge",
+                model="muse-spark-1.3-contributor-free",
+                input=0,
+                output=0,
+                reasoning=0,
+                cache_read=0,
+                cache_write=0,
+            ),
+            usage(
+                id="usage:opencode:rate-merge-2",
+                ts_ms=base + 10_000,
+                session_id="ses_rate_merge",
+                model="muse-spark-1.3-contributor-free",
+                input=10,
+                output=120,
+                reasoning=0,
+                cache_read=0,
+                cache_write=0,
+            ),
+        ],
+    )
+
+
 class TestRateToggleState:
     def test_off_by_default(self, data_dir, seeded_conn) -> None:
         app, _writes = _app()
@@ -152,3 +185,18 @@ class TestRateScreen:
         app.apply_key(KeyEvent("char", "?"))
         app.paint()
         assert any("tok/s" in line for line in _joined(app, writes).splitlines())
+
+    def test_merged_view_keeps_the_rate(self, data_dir, seeded_conn) -> None:
+        # the merged row's label and its identity differ; the rate must be
+        # found through the identity, or the column reads a row of dashes
+        _decorated_pair(seeded_conn)
+        app, writes = _app()
+        app.apply_key(KeyEvent("char", "2"))
+        app.apply_key(KeyEvent("char", "m"))
+        app.paint()
+        lines = _joined(app, writes).splitlines()
+        header = next(index for index, line in enumerate(lines) if "≈tok/s" in line)
+        row = next(
+            line for line in lines[header + 1 :] if "muse-spark" in line and line.strip()
+        )
+        assert "12.0" in row

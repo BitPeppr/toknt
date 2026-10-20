@@ -547,7 +547,7 @@ def models(
             tables.humanize_cost(est.estimated) if est else tables.DASH,
         ]
         if tps:
-            rate = rates.get(row.key)
+            rate = rates.get(row.identity)
             cells.append(f"{rate:.1f}" if rate is not None else tables.DASH)
         table.add_row(*cells)
     console.print(table)

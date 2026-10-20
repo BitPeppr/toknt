@@ -1107,7 +1107,7 @@ def paint_models(
                 ]
             )
             if include_rate:
-                rate = rates.get(entry.key)
+                rate = rates.get(entry.identity)
                 cells.append(f"{rate:.1f}" if rate is not None else "—")
             if include_share:
                 cells.append(

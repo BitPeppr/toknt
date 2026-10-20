@@ -624,6 +624,11 @@ class BreakdownRow:
     key: str
     summary: TokenSummary
     schemes: tuple[str, ...]
+    #: The stable join key: the raw value, or the canonical identity when
+    #: spellings are merged. ``key`` is the label shown to the user, which
+    #: need not equal it (a merged "muse-spark-1.3" is the identity
+    #: "muse-spark-1-3") — join on this, never on the label.
+    identity: str = ""
 
 
 def summarize(rows: Sequence[UsageRow]) -> TokenSummary:
@@ -698,6 +703,7 @@ def usage_breakdown(
         result.append(
             BreakdownRow(
                 key=_display_key(key, spellings),
+                identity=key,
                 summary=summary,
                 schemes=schemes,
             )

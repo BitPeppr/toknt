@@ -200,6 +200,43 @@ class TestModelsCommand:
         assert "≈ tok/s" in result.stdout
         assert "12.0" in result.stdout  # 120 generated tokens / 10 s
 
+    def test_tps_with_merge_models_joins_the_rate(
+        self, data_dir: Path, seeded_conn: sqlite3.Connection
+    ) -> None:
+        # a merged model's label ("muse-spark-1.3") is not its identity
+        # ("muse-spark-1-3"): the rate must be found through the identity
+        base = at(2026, 10, 8, 12, 0)
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id="usage:opencode:tps-merge-1",
+                    ts_ms=base,
+                    session_id="ses_tps_merge",
+                    model="muse-spark-1.3-contributor-free",
+                    input=0,
+                    output=0,
+                    reasoning=0,
+                    cache_read=0,
+                    cache_write=0,
+                ),
+                usage(
+                    id="usage:opencode:tps-merge-2",
+                    ts_ms=base + 10_000,
+                    session_id="ses_tps_merge",
+                    model="muse-spark-1.3-contributor-free",
+                    input=10,
+                    output=120,
+                    reasoning=0,
+                    cache_read=0,
+                    cache_write=0,
+                ),
+            ],
+        )
+        result = invoke("models", *PERIOD, "--no-chart", "--tps", "--merge-models")
+        assert result.exit_code == 0
+        assert "12.0" in result.stdout
+
 
 class TestUsageMergeModels:
     def test_usage_merges_model_rows(
