@@ -112,7 +112,7 @@ class TestToolSuccessSeries:
             ],
         )
         flt = aggregation.UsageFilter(since_ms=at(2026, 1, 5), until_ms=at(2026, 1, 8))
-        series = tool_metrics.tool_success_series(conn, flt, bucket="day", tz=None)
+        series = tool_metrics.tool_success_series(conn, flt, bucket="day", tz=UTC)
         values = series.series["bash"]
         assert values[0] == 50
         assert values[1] is None

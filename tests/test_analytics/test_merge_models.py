@@ -8,6 +8,7 @@ counted, so totals, events, sessions and cost stay consistent.
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC
 
 import pytest
 
@@ -16,7 +17,8 @@ from toknt.analytics import aggregation, model_names
 from toknt.models.usage import TokenScheme
 from toknt.storage import ingestion
 
-UTC = None
+#: The events are stamped in UTC (``at``), so the day buckets must be too:
+#: with the local zone the number of buckets depends on the machine's offset.
 
 
 def seed(conn: sqlite3.Connection, events) -> None:
@@ -136,8 +138,9 @@ class TestSeriesMerging:
             conn, flt, metric="total", bucket="day", tz=UTC, canonical=CANONICAL
         )
         assert tuple(series.series) == ("glm-5.3-flash", "glm-5.3")
-        assert series.series["glm-5.3-flash"] == (400, None, None)
-        assert series.series["glm-5.3"] == (None, 50, None)
+        # two UTC days: the 5th (both spellings) and the 6th (the other model)
+        assert series.series["glm-5.3-flash"] == (400, None)
+        assert series.series["glm-5.3"] == (None, 50)
 
     def test_series_without_canonical_keeps_both_lines(self, conn: sqlite3.Connection) -> None:
         seed(conn, _same_model_events())

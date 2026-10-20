@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -14,6 +15,14 @@ from toknt.storage import ingestion
 runner = CliRunner()
 WIDE = {"COLUMNS": "200", "LINES": "50"}
 
+#: Rich frames parts of the help with SGR codes, and where it puts them
+#: depends on the terminal it renders for. The words are what matters.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+
+
+def plain(text: str) -> str:
+    return _ANSI.sub("", text)
+
 
 def invoke(*args: str):
     return runner.invoke(app, list(args), env=WIDE)
@@ -23,9 +32,10 @@ class TestHelpFlag:
     def test_root_help(self) -> None:
         result = invoke("-h")
         assert result.exit_code == 0
-        assert "Usage:" in result.stdout
-        assert "--help" in result.stdout  # both spellings advertised
-        assert "-h" in result.stdout
+        shown = plain(result.stdout)
+        assert "Usage:" in shown
+        assert "--help" in shown  # both spellings advertised
+        assert "-h" in shown
 
     def test_every_command_accepts_dash_h(self) -> None:
         commands = (
