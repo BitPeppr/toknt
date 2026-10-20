@@ -1,5 +1,11 @@
 # toknt
 
+[![CI](https://github.com/BitPeppr/toknt/actions/workflows/ci.yml/badge.svg)](https://github.com/BitPeppr/toknt/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/toknt.svg)](https://pypi.org/project/toknt/)
+[![Python](https://img.shields.io/pypi/pyversions/toknt.svg)](https://pypi.org/project/toknt/)
+[![License](https://img.shields.io/pypi/l/toknt.svg)](https://github.com/BitPeppr/toknt/blob/main/LICENSE)
+[![Homebrew](https://img.shields.io/badge/homebrew-bitpeppr%2Fformulae-orange.svg)](https://github.com/BitPeppr/homebrew-formulae)
+
 Local-first usage analytics for AI coding harnesses. `toknt` reads the native
 telemetry of **OpenCode**, **OpenAI Codex CLI**, **Claude Code**, **Cline**,
 **pi**, **Grok Build**, **Gemini CLI** and more (21 harnesses, see
@@ -35,7 +41,15 @@ to providers, and makes no network requests at any point.
 Requires Python 3.12+.
 
 ```bash
-uv tool install .        # isolated install; pipx install . also works
+uv tool install toknt        # isolated install from PyPI
+pipx install toknt           # or pipx
+pip install toknt            # or into a virtualenv
+brew install bitpeppr/formulae/toknt   # macOS (Homebrew)
+```
+
+Then:
+
+```bash
 toknt doctor             # what toknt found on this machine
 toknt scan               # import local history (incremental)
 toknt                    # interactive: usage explorer, boot view = contributions
