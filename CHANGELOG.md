@@ -4,7 +4,15 @@ All notable changes to `toknt` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — 2026-10-23
+## [0.1.1] — 2026-10-20
+
+### Fixed
+
+- Two tests only passed on a machine in one timezone: the CLI help assertions
+  now look at the rendered text instead of the raw escape sequences, and the
+  merged-series test buckets its (UTC-stamped) events in UTC.
+
+## [0.1.0] — 2026-10-20
 
 The first public release: local-first token, cost and tool analytics for AI
 coding harnesses.
@@ -29,4 +37,5 @@ coding harnesses.
   gaps with the sources' own reporting schemes.
 - `toknt doctor` for source discovery, coverage and data-quality issues.
 
+[0.1.1]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.1
 [0.1.0]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.0
