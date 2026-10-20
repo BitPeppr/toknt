@@ -67,7 +67,11 @@ with its daily average, the **share-by-project** list, the
 **share-by-harness** list (both with inline bars) and a quiet note about
 toggled-off harnesses. On a wide screen the rail splits into two columns —
 projects beside harnesses — and project paths show their tail
-(`…/Project/kbd`), which is what tells two projects apart. Narrow terminals fold back to a single column, and
+(`…/Project/kbd`), which is what tells two projects apart. Every inline bar
+paints its series colour on the used portion only; the unfilled track is
+plain space, which respects terminals with a transparent background (halftone
+shade characters puddle into noise there) and reads as less ink elsewhere.
+Narrow terminals fold back to a single column, and
 the legend there names the harnesses that carry data as colored swatches,
 keeps toggled-off ones visible (`codex (off)`) and collapses the idle ones
 into a single `+N idle` tail. A compact tab bar (view chips,
@@ -79,6 +83,7 @@ bottom bar pairs each key with a dim action label.
 | `1`–`4`                    | contributions · tokens by model · tools · sessions                  |
 | `t`                        | cycle window: `3h → 5h → 1d → 3d → 7d → 30d → 90d → 1y → all`    |
 | `v`                        | cycle metric: total · input · output · reasoning · cached           |
+| `p`                        | models view: chart unit tokens ⇄ ≈ tokens/s (estimated)             |
 | `m`                        | merge the same model served by different providers (one row each)   |
 | `o` / `x` / `a`            | toggle OpenCode / Codex / Claude Code in every view                 |
 | `h`                        | focus one harness (cycles all → each harness that has data → all)   |
@@ -108,12 +113,38 @@ chips, and **cache hit-rate bars per model** (scheme-aware: cache reads are
 a separate denominator for anthropic-style sources, a subset for openai-style
 ones, and absent entirely for unknown schemes). Below, the per-model
 breakdown table fills the zone width and ends with a `vs max` bar showing
-each model's size relative to the busiest one. The selected **metric**
-drives all of it — the chart, the donut's shares, the table's numbers and
-the ranking — so switching to `input` re-ranks the table by input tokens
-and reports input tokens in every column. Piping or scripting (non-tty
-stdout) gets the old static print; `toknt overview` forces that dashboard,
-and `TOKNT_TUI=0` disables the interactive boot entirely.
+each model's size relative to the busiest one, and — when the zone fits it
+or `--tps` is given — an `≈tok/s` column with each model's mean generation
+rate. The selected **metric** drives all of it — the chart, the donut's
+shares, the table's numbers and the ranking — so switching to `input`
+re-ranks the table by input tokens and reports input tokens in every
+column. Pressing **`p`** trades the chart's unit: instead of tokens per
+bucket it draws the ≈ tokens/s estimate per bucket (same line-up, ranked by
+generated tokens). Piping or scripting (non-tty stdout) gets the old static
+print; `toknt overview` forces that dashboard, and `TOKNT_TUI=0` disables
+the interactive boot entirely.
+
+### Where ≈ tok/s comes from (and how accurate it is)
+
+The harnesses record when each assistant message finished, never how long it
+took, so a rate cannot be read off a single event. toknt instead pairs every
+message with its predecessor in the same session and estimates
+
+    rate ≈ Σ (output + reasoning tokens) / Σ (gap to the previous message)
+
+That is an estimate, and it is labelled ≈ everywhere it appears. Only
+generated tokens count — prompt handling (input and cache) is not part of a
+model's output speed. The pairing excludes a session's first message, gaps
+longer than five minutes (a person's lunch is not model slowness), and
+messages that report neither output nor reasoning, so those events hand
+their predecessor's gap to whoever follows. In the weighting, a slow message
+biases its day more than a fast burst, which matches what the wall clock
+actually spent. Expect ±10–25% accuracy on tool-free generation bursts and
+a systematic under-count on turns dominated by long tool runs — treat the
+comparisons between models and the trends over time as the meaningful part,
+not any single number as gospel. In interactive mode the estimate lives
+behind `p` on the models view (chart) and the table's `≈tok/s` column; on
+the command line it is `toknt models --tps`.
 
 ### Merging models across providers
 
