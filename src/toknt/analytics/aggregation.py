@@ -405,6 +405,158 @@ def cumulative(series: Series) -> Series:
     return Series(series.buckets, result, series.dimension, series.bucket)
 
 
+# ------------------------------------------------------- generation rate
+
+
+#: Window between an assistant message and its predecessor that may still
+#: count as generation time. Longer gaps are user idle or long tool runs,
+#: not model output speed — they drop out of the estimate instead of
+#: diluting it toward near zero.
+MAX_RATE_GAP_MS = 300_000
+
+
+@dataclass(frozen=True, slots=True)
+class RatePoint:
+    """One message's contribution to a generation-rate estimate."""
+
+    ts_ms: int
+    model: str | None
+    generated_tokens: int
+    gap_ms: int
+
+
+def rate_points(rows: Sequence[UsageRow]) -> list[RatePoint]:
+    """Pair usage events with the gap to their session predecessor.
+
+    ``rows`` arrives in ``ts`` order (``fetch_usage_rows`` sorts). Generated
+    tokens are output + reasoning: prompt handling is not what a rate
+    measures. An event reporting neither kind is skipped, which lets the
+    next gap span it; a session's first event has no predecessor. Gaps are
+    per ``(agent, session)`` — agents never share a session namespace.
+    """
+    points: list[RatePoint] = []
+    previous: dict[tuple[str, str | None], int] = {}
+    for row in rows:
+        output = metric_value(row, "output")
+        reasoning = metric_value(row, "reasoning")
+        if output is None and reasoning is None:
+            continue
+        key = (row.agent, row.session_id)
+        prev_ms = previous.get(key)
+        previous[key] = row.ts_ms
+        if prev_ms is None:
+            continue
+        gap_ms = row.ts_ms - prev_ms
+        if gap_ms <= 0 or gap_ms > MAX_RATE_GAP_MS:
+            continue
+        generated = (output or 0) + (reasoning or 0)
+        points.append(RatePoint(row.ts_ms, row.model, generated, gap_ms))
+    return points
+
+
+def _rate_of(generated: int, gap_ms: int) -> float | None:
+    """Wall-clock-weighted mean rate for a set of message pairs."""
+    return generated / (gap_ms / 1000) if gap_ms > 0 else None
+
+
+def model_rate_totals(
+    conn: sqlite3.Connection,
+    flt: UsageFilter,
+    *,
+    canonical: Callable[[str], CanonicalName] | None = None,
+) -> dict[str, float | None]:
+    """Mean generation tokens/s per model identity over the whole window.
+
+    Keys use the same convention as ``usage_breakdown``'s model keys (the
+    identity when ``canonical`` is given, the raw spelling otherwise) so a
+    table row can look its rate up directly. The estimate is labelled ≈
+    everywhere it is shown: the harnesses record when a message completed,
+    never how long it took.
+    """
+    per_key: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for point in rate_points(fetch_usage_rows(conn, flt)):
+        raw = point.model or "(unknown)"
+        if canonical is None:
+            key = raw
+        else:
+            key = canonical(raw).identity
+        acc = per_key[key]
+        acc[0] += point.generated_tokens
+        acc[1] += point.gap_ms
+    return {key: _rate_of(num, ms) for key, (num, ms) in per_key.items()}
+
+
+def generation_rate_series(
+    conn: sqlite3.Connection,
+    flt: UsageFilter,
+    *,
+    bucket: str = "day",
+    tz: tzinfo | None = None,
+    top_n: int | None = 8,
+    other_label: str = "(other)",
+    canonical: Callable[[str], CanonicalName] | None = None,
+) -> Series:
+    """Per-bucket mean generation tokens/s, split by model — ≈ estimate.
+
+    Grouping follows ``usage_series`` (top models by generated tokens keep
+    the two charts' line-up stable when switching), but each value is
+    Σ generated / Σ gap over that bucket's usable message pairs rather than
+    a sum, and merges spellings canonically when asked.
+    """
+    tz = tz or default_timezone()
+    rows = fetch_usage_rows(conn, flt)
+    points = rate_points(rows)
+    if not points:
+        return Series((), {}, "model", bucket)
+    start = _series_start(flt.since_ms, min(point.ts_ms for point in points))
+    end = (
+        (flt.until_ms - 1) if flt.until_ms is not None else max(point.ts_ms for point in points)
+    )
+    buckets = bucket_starts(start, end, bucket, tz)
+
+    per_key: dict[str, dict[int, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+    totals: dict[str, int] = defaultdict(int)
+    spellings: dict[str, list[str]] = defaultdict(list)
+    for point in points:
+        raw = point.model or "(unknown)"
+        if canonical is None:
+            key, label = raw, raw
+        else:
+            name = canonical(raw)
+            key, label = name.identity, name.label
+        acc = per_key[key][bucket_start_ms(point.ts_ms, bucket, tz)]
+        acc[0] += point.generated_tokens
+        acc[1] += point.gap_ms
+        totals[key] += point.generated_tokens
+        spellings[key].append(label)
+    keys = sorted(totals, key=lambda key: (-totals[key], key))
+    if top_n is not None and len(keys) > top_n:
+        top = keys[:top_n]
+        merged: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+        for key in keys[top_n:]:
+            for bucket_ms, (num, ms) in per_key[key].items():
+                acc = merged[bucket_ms]
+                acc[0] += num
+                acc[1] += ms
+        series_keys = top + [other_label]
+        per_key[other_label] = merged
+        spellings[other_label].append(other_label)
+    else:
+        series_keys = keys
+
+    def bucket_values(key: str) -> tuple[float | None, ...]:
+        acc_by_bucket = per_key[key]
+        return tuple(
+            _rate_of(acc[0], acc[1]) if (acc := acc_by_bucket.get(bucket_ms)) else None
+            for bucket_ms in buckets
+        )
+
+    series = {
+        _display_key(key, spellings): bucket_values(key) for key in series_keys
+    }
+    return Series(tuple(buckets), series, "model", bucket)
+
+
 def activity_series(
     conn: sqlite3.Connection,
     flt: UsageFilter,

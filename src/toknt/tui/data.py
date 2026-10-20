@@ -168,6 +168,25 @@ class Analysis:
             canonical=model_names.canonical_model if merge else None,
         ))
 
+    def model_rate_series(
+        self,
+        since_ms: int,
+        agents: AgentToggles,
+        bucket: str = "day",
+        *,
+        merge: bool = False,
+    ) -> aggregation.Series:
+        """≈ tokens/s per model per bucket (see aggregation for the method)."""
+        key = ("model_rate_series", since_ms, agents.active, bucket, merge)
+        return self._memo(key, lambda: aggregation.generation_rate_series(
+            self.conn,
+            self.usage_filter(since_ms, agents),
+            bucket=bucket,
+            tz=self.tz,
+            top_n=8,
+            canonical=model_names.canonical_model if merge else None,
+        ))
+
     def model_rows(
         self,
         since_ms: int,
@@ -182,6 +201,15 @@ class Analysis:
             canonical=model_names.canonical_model if merge else None,
             metric=metric,
         )))
+
+    def model_rate_totals(
+        self, since_ms: int, agents: AgentToggles, *, merge: bool = False
+    ) -> dict[str, float | None]:
+        key = ("model_rate_totals", since_ms, agents.active, merge)
+        return self._memo(key, lambda: aggregation.model_rate_totals(
+            self.conn, self.usage_filter(since_ms, agents),
+            canonical=model_names.canonical_model if merge else None,
+        ))
 
     def project_rows(
         self, since_ms: int, agents: AgentToggles

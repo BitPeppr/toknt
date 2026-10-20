@@ -45,6 +45,7 @@ HINT_PAIRS = (
     ("v", "metric"),
     ("m", "merge"),
     ("?", "help"),
+    ("p", "tok/s"),
     ("h", "focus"),
     ("o/x/a/h", "harness"),
     ("r", "rescan"),
@@ -67,6 +68,7 @@ class AppState:
     metric: int = 0                     # index into METRICS
     agents: HarnessToggles = HarnessToggles()
     merge_models: bool = False          # merge one model served by many providers
+    rate_mode: bool = False             # models chart: tokens/s instead of tokens
     cursor_day: int | None = None       # contributions inspect day
     session_row: int = 0
     tool_row: int = 0
@@ -966,22 +968,33 @@ def paint_models(
     now_ms: int,
 ) -> ViewPaint:
     since_ms = since_for(state, now_ms)
-    series = analysis.model_series(
-        since_ms,
-        state.agents,
-        current_metric(state),
-        bucket=current_bucket(state),
-        merge=state.merge_models,
-    )
     metric = current_metric(state)
+    if state.rate_mode:
+        # the graph switches units; the table keeps the token breakdown
+        series = analysis.model_rate_series(
+            since_ms,
+            state.agents,
+            bucket=current_bucket(state),
+            merge=state.merge_models,
+        )
+        heading = "≈ tokens/s by model — output+reasoning over message gaps"
+    else:
+        series = analysis.model_series(
+            since_ms,
+            state.agents,
+            metric,
+            bucket=current_bucket(state),
+            merge=state.merge_models,
+        )
+        heading = f"tokens by model — {aggregation.metric_label(metric)}"
+    if state.merge_models:
+        heading += " (merged across providers)"
+    paint_heading(painter, columns, heading)
+    rates = analysis.model_rate_totals(since_ms, state.agents, merge=state.merge_models)
     breakdown = analysis.model_rows(
         since_ms, state.agents, merge=state.merge_models, metric=metric
     )
     cache_rates = analysis.cache_rates(since_ms, state.agents, merge=state.merge_models)
-    heading = f"tokens by model — {aggregation.metric_label(metric)}"
-    if state.merge_models:
-        heading += " (merged across providers)"
-    paint_heading(painter, columns, heading)
     shares = [
         (entry.key, float(entry.summary.total))
         for entry in breakdown[:6]
@@ -1000,7 +1013,12 @@ def paint_models(
         height_rows=plot_rows + 1,  # P image rows, then ticks, then legend
         series=series,
         ctx=ctx,
-        identity=(state.window, state.metric, tuple(sorted(state.agents.active))),
+        identity=(
+            state.window,
+            state.metric,
+            tuple(sorted(state.agents.active)),
+            state.rate_mode,
+        ),
     )
     pie_image = None
     if rail_width:
@@ -1026,8 +1044,12 @@ def paint_models(
     if columns >= 78:
         # full breakdown: model, tokens, events, sessions, cost (+ a
         # relative-magnitude bar when the zone has room to breathe)
-        fixed = 10 + 8 + 9 + 8
-        gutter = 2 * 5
+        # a rate column only when the zone can afford a comfortable name
+        include_rate = table_width >= 80 and any(
+            value is not None for value in rates.values()
+        )
+        fixed = 10 + 8 + 9 + 8 + (7 if include_rate else 0)
+        gutter = 2 * (6 if include_rate else 5)
         share_width = 9
         name_width = table_width - fixed - gutter - share_width
         if name_width < 16:  # no room for the bar: the name wins
@@ -1043,7 +1065,12 @@ def paint_models(
             (">events", 8, 1),
             (">sessions", 9, 1),
             (">cost", 8, 1),
-        ] + ([("vs max", share_width, 0)] if include_share else [])
+        ]
+        if include_rate:
+            # ≈ marks the estimate: a message's completion timestamp is
+            # recorded, its duration is not
+            columns_spec.append((">≈tok/s", 7, 1))
+        columns_spec += [("vs max", share_width, 0)] if include_share else []
     else:
         # narrow: model, the metric, events (total ~54 columns)
         columns_spec = [
@@ -1054,6 +1081,7 @@ def paint_models(
     peak_tokens = max(
         (entry.summary.total or 0 for entry in breakdown[:24]), default=0
     )
+    include_rate = ">≈tok/s" in {spec[0] for spec in columns_spec}
     table_rows: list[list[str]] = []
     for entry in breakdown[:24]:
         summary = entry.summary
@@ -1069,6 +1097,9 @@ def paint_models(
                     _cost_text(summary.cost_reported),
                 ]
             )
+            if include_rate:
+                rate = rates.get(entry.key)
+                cells.append(f"{rate:.1f}" if rate is not None else "—")
             if include_share:
                 cells.append(
                     widgets.bar_glyphs(
@@ -1383,6 +1414,7 @@ HELP_LINES = (
     "t       window: 3h/5h/1d/3d/7d/30d/90d/1y/all",
     "        (short windows auto-refresh)",
     "v       metric: total/input/output/reasoning/…",
+    "p       tok/s ⇄ tokens (models chart, ≈ estimated)",
     "m       merge models served by different providers",
     "        (glm-5.3-flash == z-ai/glm-5.3-flash)",
     "o/x/a   toggle opencode · codex · claude_code",

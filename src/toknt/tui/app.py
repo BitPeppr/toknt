@@ -190,6 +190,11 @@ class App:
             if char == "v":
                 self.state.metric = (self.state.metric + 1) % len(views.METRICS)
                 return True
+            if char == "p":
+                if self.state.view != 1:  # only the models chart has rates
+                    return False
+                self.state.rate_mode = not self.state.rate_mode
+                return True
             if char == "m":
                 self.state.merge_models = not self.state.merge_models
                 return True

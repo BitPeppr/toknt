@@ -158,6 +158,48 @@ class TestModelsCommand:
         assert "opencode" in result.stdout
         assert "nvidia" in result.stdout
 
+    def test_no_tps_column_by_default(
+        self, data_dir: Path, seeded_conn: sqlite3.Connection
+    ) -> None:
+        result = invoke("models", *PERIOD, "--no-chart")
+        assert result.exit_code == 0
+        assert "≈ tok/s" not in result.stdout
+
+    def test_tps_column_shows_estimated_rates(
+        self, data_dir: Path, seeded_conn: sqlite3.Connection
+    ) -> None:
+        base = at(2026, 10, 8, 12, 0)
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id="usage:opencode:tps-1",
+                    ts_ms=base,
+                    session_id="ses_tps_pair",
+                    model="rate-model",
+                    input=0,
+                    output=0,
+                    reasoning=0,
+                    cache_read=0,
+                    cache_write=0,
+                ),
+                usage(
+                    id="usage:opencode:tps-2",
+                    ts_ms=base + 10_000,
+                    session_id="ses_tps_pair",
+                    model="rate-model",
+                    output=120,
+                    reasoning=0,
+                    cache_read=0,
+                    cache_write=0,
+                ),
+            ],
+        )
+        result = invoke("models", *PERIOD, "--no-chart", "--tps")
+        assert result.exit_code == 0
+        assert "≈ tok/s" in result.stdout
+        assert "12.0" in result.stdout  # 120 generated tokens / 10 s
+
 
 class TestUsageMergeModels:
     def test_usage_merges_model_rows(

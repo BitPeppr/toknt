@@ -475,6 +475,11 @@ def models(
         "--merge-models",
         help="Merge the same model served by different providers (one row per model).",
     ),
+    tps: bool = typer.Option(
+        False,
+        "--tps",
+        help="Add a ≈tok/s column (mean generation rate, estimated from message gaps).",
+    ),
 ) -> None:
     """Model inventory with per-model usage and costs."""
     cfg = _config()
@@ -485,6 +490,9 @@ def models(
     try:
         breakdown = aggregation.usage_breakdown(
             conn, flt, dimension="model", canonical=canonical
+        )
+        rates = (
+            aggregation.model_rate_totals(conn, flt, canonical=canonical) if tps else {}
         )
         inventory = {
             row["model"]: row for row in aggregation.model_inventory(conn)
@@ -514,6 +522,11 @@ def models(
     table.add_column("total", justify="right")
     table.add_column("reported cost", justify="right")
     table.add_column("est. cost", justify="right")
+    if tps:
+        # ≈ marks the estimate: a message's completion timestamp is
+        # recorded, its duration is not — the rate pairs each message
+        # with its predecessor's gap
+        table.add_column("≈ tok/s", justify="right")
     for row in breakdown:
         info = inventory.get(row.key, {})
         est = estimates.get(row.key)
@@ -524,7 +537,7 @@ def models(
         else:
             providers = str(info.get("provider") or tables.DASH)
             agent_count = int(info.get("agents", 0) or 0)
-        table.add_row(
+        cells = [
             cfg.display_name(row.key),
             providers,
             str(agent_count),
@@ -532,7 +545,11 @@ def models(
             tables.humanize_int(row.summary.total),
             tables.humanize_cost(row.summary.cost_reported),
             tables.humanize_cost(est.estimated) if est else tables.DASH,
-        )
+        ]
+        if tps:
+            rate = rates.get(row.key)
+            cells.append(f"{rate:.1f}" if rate is not None else tables.DASH)
+        table.add_row(*cells)
     console.print(table)
 
     if chart:
