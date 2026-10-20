@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
+import pytest
+
 from tests.support.models import at, usage
 from toknt.config import AppConfig
 from toknt.storage import ingestion
@@ -148,6 +150,13 @@ class TestRateToggleState:
         app.apply_key(KeyEvent("char", "2"))  # models
         assert app.state.status == ""
 
+    def test_ctrl_c_quits(self, data_dir, seeded_conn) -> None:
+        # the terminal is in raw mode, so the signal never arrives on its
+        # own: the key reference promises ctrl+c quits
+        app, _writes = _app()
+        with pytest.raises(SystemExit):
+            app.apply_key(KeyEvent("ctrl+c"))
+
 
 class TestRateScreen:
     """136 columns: the table zone is wide enough for the ≈tok/s column."""
@@ -186,7 +195,10 @@ class TestRateScreen:
         app.paint()
         joined = _joined(app, writes)
         assert "≈ tokens/s by model" in joined
-        assert "no data for this window" in joined
+        # the window is not empty — only the rate is unmeasurable, and the
+        # message says so
+        assert "no rate data" in joined
+        assert "no data for this window" not in joined
         assert "≈tok/s" not in joined
 
     def test_help_card_mentions_p(self, data_dir, seeded_conn) -> None:

@@ -67,10 +67,10 @@ with its daily average, the **share-by-project** list, the
 **share-by-harness** list (both with inline bars) and a quiet note about
 toggled-off harnesses. On a wide screen the rail splits into two columns —
 projects beside harnesses — and project paths show their tail
-(`…/Project/kbd`), which is what tells two projects apart. Every inline bar
-paints its series colour on the used portion only; the unfilled track is
-plain space, which respects terminals with a transparent background (halftone
-shade characters puddle into noise there) and reads as less ink elsewhere.
+(`…/Project/kbd`), which is what tells two projects apart. The bars that carry a series colour paint it on the used portion
+only; the unfilled track is plain space, which respects terminals with a
+transparent background (halftone shade characters puddle into noise there)
+and reads as less ink everywhere.
 Narrow terminals fold back to a single column, and
 the legend there names the harnesses that carry data as colored swatches,
 keeps toggled-off ones visible (`codex (off)`) and collapses the idle ones
@@ -114,7 +114,7 @@ a separate denominator for anthropic-style sources, a subset for openai-style
 ones, and absent entirely for unknown schemes). Below, the per-model
 breakdown table fills the zone width and ends with a `vs max` bar showing
 each model's size relative to the busiest one, and — when the table zone
-can afford it (roughly 130 columns or wider) — an `≈tok/s` column with each
+can afford it (about 110 columns or wider) — an `≈tok/s` column with each
 model's mean generation rate. The selected **metric** drives all of it —
 the chart, the donut's shares, the table's numbers and the ranking — so
 switching to `input` re-ranks the table by input tokens and reports input

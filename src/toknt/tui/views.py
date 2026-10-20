@@ -30,6 +30,10 @@ DAY_MS = 86_400_000
 VIEW_TITLES = ("contributions", "models", "tools", "sessions")
 METRICS = ("total", "input", "output", "reasoning", "cached")
 
+#: The table zone a model rate column needs: its own 7 columns, the
+#: gutters around it, and a 16-character model name to sit beside.
+RATE_TABLE_WIDTH = 72
+
 #: Short column labels so a table can follow the selected metric.
 METRIC_COLUMN_LABELS = {
     "total": "tokens",
@@ -45,9 +49,9 @@ HINT_PAIRS = (
     ("v", "metric"),
     ("m", "merge"),
     ("?", "help"),
+    ("p", "tok/s"),
     ("h", "isolate"),
     ("o/x/a", "harness"),
-    ("p", "tok/s"),
     ("r", "rescan"),
     ("↑↓←→", "inspect"),
 )  # "q quit" is pinned to the right edge by paint_hints; pairs are ordered
@@ -179,33 +183,43 @@ def title_row(
     )
     if state.merge_models:
         chips = chips + ("merged",)
+    # the chips hold the persistent state (window, metric, harnesses). A
+    # scan in progress is live state and keeps the title row (the chips
+    # give way); a transient message takes the space that is left and
+    # falls back to the hint bar when there is none.
+    note = ""
+    if state.scanning:
+        note = "‣ scanning…"
+    elif state.status:
+        note = state.status
+    reserve = len(note) + 2 if state.scanning else 0
     for chip in chips:
-        if x + len(chip) + 2 < left + width - 12:
+        if x + len(chip) + 2 < left + width - reserve:
             painter.text(0, x, "·", widgets.MUTED)
             x += 2
             painter.text(0, x, chip, TITLE_ATTR)
             x += len(chip) + 2
-    if state.scanning:
-        note = "‣ scanning…"
-        painter.text(0, max(left + width - len(note) - 1, x), note, widgets.MUTED)
-    elif state.status:
-        # a one-line note at the page's right edge: scan results, the
-        # selftest, off-view key feedback. Clipped to the room the chips
-        # left, with an ellipsis when it does not fit — never allowed to
-        # reach back into the chips.
-        room = max(left + width - x - 3, 0)
-        if room >= 4:
-            note = state.status if len(state.status) <= room else state.status[: room - 1] + "…"
+    if note:
+        room = left + width - x - 1
+        if room >= len(note):
             painter.text(0, left + width - len(note) - 1, note, widgets.MUTED)
+        else:
+            # no room in the title row: the note takes the hint bar's place
+            # rather than vanishing
+            paint_hints(painter, rows - 1, columns, note=note)
+            return
     paint_hints(painter, rows - 1, columns)
 
 
-def paint_hints(painter: Painter, row: int, columns: int) -> None:
+def paint_hints(
+    painter: Painter, row: int, columns: int, *, note: str = ""
+) -> None:
     """Bottom bar: bold keys + dim actions, no full-width highlight strip.
 
     ``q quit`` is pinned to the right edge so the quit key stays visible on
     narrow terminals; the remaining pairs fill left-to-right and drop from
-    the middle inward when they no longer fit.
+    the middle inward when they no longer fit. ``note`` takes the bar's
+    place when a message has nowhere else to go.
     """
     if row <= 0 or columns <= 4:
         return
@@ -216,6 +230,14 @@ def paint_hints(painter: Painter, row: int, columns: int) -> None:
     painter.text(row, quit_x, quit_key, KEY_ATTR)
     painter.text(row, quit_x + len(quit_key) + 1, quit_action, widgets.MUTED)
     x = left
+    if note:
+        # the note replaces the first hint pairs: it is the more urgent
+        # information and the keys are in the help card anyway
+        room = quit_x - 2 - x
+        if room >= 4:
+            shown = note if len(note) <= room else note[: room - 1] + "…"
+            painter.text(row, x, shown, widgets.MUTED)
+            x += len(shown) + 2
     for key, action in HINT_PAIRS:
         if x + len(key) + 1 + len(action) > quit_x - 2:
             break
@@ -1001,7 +1023,6 @@ def paint_models(
     if state.merge_models:
         heading += " (merged across providers)"
     paint_heading(painter, columns, heading)
-    rates = analysis.model_rate_totals(since_ms, state.agents, merge=state.merge_models)
     breakdown = analysis.model_rows(
         since_ms, state.agents, merge=state.merge_models, metric=metric
     )
@@ -1014,23 +1035,47 @@ def paint_models(
     main_col, rail_col, rail_width = zones(columns, want_rail=bool(shares))
     _page_col, page_width = page_frame(columns)
     main_width = page_width - (rail_width + 3 if rail_width else 0)
+    rates = analysis.model_rate_totals(since_ms, state.agents, merge=state.merge_models)
+    if any(value is not None for value in rates.values()) and rail_width:
+        # The rate column needs room the main zone may not have: the rail
+        # takes a fixed share of the page, so the column would appear and
+        # disappear as the terminal widens. Borrow from the rail instead
+        # (it needs far less than it asks for) and keep the column.
+        needed = RATE_TABLE_WIDTH
+        if main_width < needed:
+            borrow = min(needed - main_width, max(rail_width - 28, 0))
+            if borrow > 0:
+                rail_width -= borrow
+                main_width += borrow
+                rail_col = main_col + main_width + 3
 
     plot_rows = chart_budget(rows, page_width=page_width)  # ~45% of the height
-    image = paint_chart(
-        painter,
-        row=3,
-        col=main_col,
-        width_columns=main_width if rail_width else page_width,
-        height_rows=plot_rows + 1,  # P image rows, then ticks, then legend
-        series=series,
-        ctx=ctx,
-        identity=(
-            state.window,
-            state.metric,
-            tuple(sorted(state.agents.active)),
-            state.rate_mode,
-        ),
-    )
+    if state.rate_mode and series.is_empty and not token_series.is_empty:
+        # the window has usage; it just has no measurable rate (events
+        # without session attribution cannot be paired)
+        painter.text(
+            3,
+            main_col,
+            "no rate data: events carry no session attribution",
+            DEFAULT_ATTRS,
+        )
+        image = None
+    else:
+        image = paint_chart(
+            painter,
+            row=3,
+            col=main_col,
+            width_columns=main_width if rail_width else page_width,
+            height_rows=plot_rows + 1,  # P image rows, then ticks, then legend
+            series=series,
+            ctx=ctx,
+            identity=(
+                state.window,
+                state.metric,
+                tuple(sorted(state.agents.active)),
+                state.rate_mode,
+            ),
+        )
     pie_image = None
     # the table's extent decides how far the rail's cache list may run: the
     # two blocks end on the same row, so the page reads as one frame
@@ -1063,7 +1108,7 @@ def paint_models(
         # full breakdown: model, tokens, events, sessions, cost (+ a
         # relative-magnitude bar when the zone has room to breathe)
         # a rate column only when the zone can afford a comfortable name
-        include_rate = table_width >= 80 and any(
+        include_rate = table_width >= RATE_TABLE_WIDTH and any(
             value is not None for value in rates.values()
         )
         fixed = 10 + 8 + 9 + 8 + (7 if include_rate else 0)
@@ -1073,7 +1118,14 @@ def paint_models(
         if name_width < 16:  # no room for the bar: the name wins
             share_width = 0
             name_width = table_width - fixed - gutter
-        name_width = max(min(name_width, 56), 14)
+        if include_rate and name_width < 16:
+            # the rate yields to a readable name
+            include_rate = False
+            fixed = 10 + 8 + 9 + 8
+            gutter = 2 * 5
+            name_width = table_width - fixed - gutter
+        # the name never overflows the zone, however tight it is
+        name_width = max(min(name_width, 56), min(14, table_width - fixed - gutter))
         slack = table_width - (name_width + fixed + gutter + share_width)
         share_width = min(36, share_width + max(slack, 0))
         include_share = share_width > 0
@@ -1438,8 +1490,6 @@ HELP_LINES = (
     "t       window: 3h/5h/1d/3d/7d/30d/90d/1y/all",
     "        (short windows auto-refresh)",
     "v       metric: total/input/output/reasoning/…",
-    "h       isolate one harness: all → each → all",
-    "        (o/x/a toggle harnesses one by one)",
     "p       tok/s ⇄ tokens (models chart, ≈ estimated)",
     "m       merge models served by different providers",
     "        (glm-5.3-flash == z-ai/glm-5.3-flash)",
@@ -1461,15 +1511,22 @@ def paint_help(painter: Painter, painter_rows: int, painter_columns: int) -> Non
         # a short terminal drops the indented examples first, then the
         # least-used entries: the card must never run off the screen
         compact = [line for line in lines if not line.startswith("        ")]
-        lines = compact if len(compact) <= available else lines[:available]
+        lines = compact[:available]
     width = min(max(len(line) for line in lines) + 4, painter_columns - 4)
     height = len(lines) + 2
     top = max((painter_rows - height) // 2, 1)
-    left = max((painter_columns - width) // 2, 1)
+    page_left, page_width = page_frame(painter_columns)
+    # the card belongs to the page, not to the whole terminal
+    left = max(page_left + (page_width - width) // 2, 1)
     for y, line in enumerate(lines):
         painter.clear(top + 1 + y, left, width, 1)
         attr = TITLE_ATTR if y == 0 else DEFAULT_ATTRS
         painter.text(top + 1 + y, left, line.ljust(width), attr)
+    # the card's own border: without it the view underneath leaks out
+    # beside the text and reads as garbage
+    for y in range(top, top + height):
+        painter.clear(y, left - 2, 2, 1)
+        painter.clear(y, left + width, 2, 1)
 
 
 def _cost_text(value: float | None) -> str:

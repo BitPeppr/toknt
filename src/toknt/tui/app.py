@@ -137,8 +137,12 @@ class App:
         if backend == "off":
             self.state.status = "graphics off (braille charts)"
             return True
-        width_px = 80 * self.ctx.cell_w
-        height_px = 20 * self.ctx.cell_h
+        # the test image fits the screen it is drawn on: a fixed 80x20
+        # image is larger than a small terminal and lands clipped
+        columns = max(min(80, self.painter.columns - 4), 8)
+        rows = max(min(20, self.painter.rows - 4), 4)
+        width_px = columns * self.ctx.cell_w
+        height_px = rows * self.ctx.cell_h
         png, rgba = graphics.test_chart_png(width_px, height_px)
         payload = graphics.encode_placement(
             backend,
@@ -146,12 +150,12 @@ class App:
             rgba,
             width_px,
             height_px,
-            columns=80,
-            rows=20,
+            columns=columns,
+            rows=rows,
             image_id=3,
         )
         self.term.write(b"\x1b[3;3H" + payload)
-        self._last_images[3] = ("selftest", 2, 2, 80, 20)
+        self._last_images[3] = ("selftest", 2, 2, columns, rows)
         self.state.status = f"graphics self-test drawn ({backend})"
         return True
 
@@ -166,7 +170,11 @@ class App:
 
     def apply_key(self, event: KeyEvent) -> bool:
         """Mutate state for one key; True when the screen needs a repaint."""
-        if event.name in ("ctrl+c", "ctrl+d", "esc"):
+        if event.name == "ctrl+c":
+            # the key reference promises ctrl+c quits: the terminal is in
+            # raw mode, so the signal never arrives on its own
+            raise SystemExit(0)
+        if event.name in ("ctrl+d", "esc"):
             return False
         if event.is_char("q"):
             raise SystemExit(0)
@@ -286,9 +294,8 @@ class App:
         rows, columns = self.painter.rows, self.painter.columns
         self.painter.clear(0, 0, columns, rows)
         if rows < MIN_ROWS or columns < MIN_COLS:
-            self.painter.text(
-                0, 0, "terminal too small: need ≥14 rows × 60 columns"
-            )
+            self.painter.text(0, 0, f"terminal too small: need ≥{MIN_ROWS} rows")
+            self.painter.text(1, 0, f"× {MIN_COLS} columns")
             self._sync_images_begin(())
             self.term.write(self.painter.frame())
             self._sync_images_end(())

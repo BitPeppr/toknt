@@ -56,42 +56,52 @@ def _screen(app: App, rows: int, cols: int) -> dict[int, str]:
 class TestTitleStatus:
     """The title bar's right edge: a one-line note, never over the chips."""
 
-    def _line(self, columns: int = 120, **state_kwargs) -> str:
+    def _screen(self, columns: int = 120, **state_kwargs) -> list[str]:
         painter = Painter()
         painter.resize(14, columns)
         state = AppState(**state_kwargs)
         title_row(painter, state, rows=14, columns=columns)
-        return "".join(cell.char for cell in painter.buffer[0])
+        return [
+            "".join(cell.char for cell in painter.buffer[row]).rstrip()
+            for row in range(14)
+        ]
 
     def test_status_renders_right_aligned(self) -> None:
-        line = self._line(columns=200, status="scan done: 5 new events")
-        assert line.rstrip().endswith("scan done: 5 new events")
+        lines = self._screen(columns=200, status="scan done: 5 new events")
+        assert lines[0].rstrip().endswith("scan done: 5 new events")
 
     def test_scanning_note_wins_over_status(self) -> None:
-        line = self._line(status="scan done: 5", scanning=True)
-        assert "‣ scanning…" in line
-        assert "scan done" not in line
+        lines = self._screen(status="scan done: 5", scanning=True)
+        assert "‣ scanning…" in lines[0]
+        assert "scan done" not in lines[0]
 
     def test_status_too_long_is_clipped_with_an_ellipsis(self) -> None:
-        line = self._line(columns=120, status="scan done: 5 new events")
-        assert "scan done" in line
-        assert line.rstrip().endswith("…")
+        lines = self._screen(columns=120, status="scan done: 5 new events")
+        # the message is too long for the space the chips left: it moves to
+        # the hint bar whole rather than being cut to nothing
+        assert "scan done: 5 new events" in "\n".join(lines)
+
+    def test_status_falls_back_to_the_hint_bar_when_it_does_not_fit(self) -> None:
+        # at 60 columns the tab strip fills the title row: the note moves
+        # to the bottom bar rather than disappearing
+        lines = self._screen(columns=60, status="tok/s applies to the models view")
+        assert "tok/s applies" in lines[13]
+        assert "q quit" in lines[13]
 
     def test_long_status_never_collides_with_chips(self) -> None:
-        line = self._line(status="x" * 300)
-        assert "x" in line
-        # the chips must survive intact: the note never reaches back into them
-        assert "harnesses: all" in line
-        assert "90d" in line
+        lines = self._screen(status="x" * 300)
+        # the chips must survive intact: a note never evicts them
+        assert "harnesses: all" in lines[0]
+        assert "90d" in lines[0]
 
     def test_status_stays_inside_the_page_frame(self) -> None:
-        line = self._line(columns=120, status="y" * 40)
+        lines = self._screen(columns=120, status="y" * 40)
         page_left = 2
         page_right = 118
-        first = line.index("y")
-        last = len(line.rstrip()) - 1
-        assert page_left <= first
-        assert last <= page_right
+        for line in lines:
+            assert len(line) <= page_right + 1
+        joined = "\n".join(lines)
+        assert page_left <= joined.index("y")
 
 
 class TestModelRailAlignment:
