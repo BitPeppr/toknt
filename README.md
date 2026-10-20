@@ -480,9 +480,10 @@ scans can never inflate totals.
   your earliest stored event (even with `--since all`) and, once the span
   exceeds one year, tick labels carry the two-digit year so the chronology
   stays unambiguous. Token **line** charts (`toknt overview`, `toknt usage
-  --chart line`) plot on a log10 axis with token-unit tick labels (1K, 1M,
-  …) so heavy hitters cannot flatten everyone else; `--chart bar|stacked`
-  and rate/percentage charts stay linear so bar lengths keep their
+  --chart line`) plot on a logarithmic axis with token-unit tick labels
+  (1K, 1M, …) so heavy hitters cannot flatten everyone else; a day with
+  zero tokens sits on the baseline. `--chart bar|stacked` and
+  rate/percentage charts stay linear so bar lengths keep their
   proportional meaning.
 
 ## Development
