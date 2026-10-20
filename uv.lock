@@ -160,7 +160,6 @@ wheels = [
 
 [[package]]
 name = "toknt"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "platformdirs" },
