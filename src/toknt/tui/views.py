@@ -377,10 +377,10 @@ def chart_ticks(
 #: Columns of breathing room at each side of the page.
 PAGE_MARGIN = 2
 
-#: The page never stretches past this many columns: a dashboard that spans
-#: a 200-column terminal is harder to read than one that keeps its
-#: margins and sits centered, and the side margins stay even.
-PAGE_MAX_WIDTH = 132
+#: The page never stretches past this many columns: past that the layout
+#: would have to stretch rows to fill it, and the side margins stay even.
+#: Generous enough that an ultrawide monitor still feels used.
+PAGE_MAX_WIDTH = 192
 
 
 def page_frame(columns: int) -> tuple[int, int]:
@@ -422,10 +422,17 @@ def zones(columns: int, *, want_rail: bool = True) -> tuple[int, int, int]:
     return left, rail_col, rail_width
 
 
-def chart_budget(rows: int, *, min_plot: int = 5, max_plot: int = 15) -> int:
-    """The line chart's image height: ~45% of the content rows, clamped."""
+def chart_budget(
+    rows: int, *, min_plot: int = 5, max_plot: int = 15, page_width: int = 0
+) -> int:
+    """The line chart's image height: ~45% of the content rows, clamped.
+
+    A wide page may afford a taller chart: without that, a 150-column
+    chart would be a flat ribbon.
+    """
     content_rows = max(rows - 4, 4)
-    return max(min_plot, min(max_plot, content_rows * 45 // 100))
+    ceiling = max(max_plot, min(26, page_width // 10))
+    return max(min_plot, min(ceiling, content_rows * 45 // 100))
 
 
 # ----------------------------------------------------------------- views
@@ -625,6 +632,20 @@ def _paint_day_cards(
         painter.text(cursor + 2, col, moment.strftime("%a %d %b"), widgets.MUTED)
 
 
+def _project_label(path: str) -> str:
+    """The tail of a project path: '…/Project/kbd'.
+
+    Two projects rarely differ in their first segments, so the head of a
+    path says the same thing on every row — the tail is what tells them
+    apart.
+    """
+    parts = [part for part in path.split("/") if part]
+    if not parts:
+        return path
+    tail = "/".join(parts[-2:])
+    return f"\u2026/{tail}" if len(parts) > 2 else tail
+
+
 def _paint_contribution_rail(
     painter: Painter,
     col: int,
@@ -657,45 +678,73 @@ def _paint_contribution_rail(
         widgets.MUTED,
     )
     cursor += 4
-    if projects and cursor <= bottom - 1:
-        painter.text(cursor, col, "share by project", widgets.MUTED)
+    # a wide rail splits into two columns: the projects on the left, the
+    # harnesses on the right. Extra width becomes more readable rows
+    # instead of longer empty ones.
+    two_columns = width >= 96
+    project_col = col
+    project_width = width - (width // 2 + 3) if two_columns else width
+    harness_col = col + width - width // 2 if two_columns else col
+    harness_width = width // 2 if two_columns else width
+
+    def paint_list(
+        heading: str,
+        entries: dict[str, int],
+        list_col: int,
+        list_width: int,
+        index_of,
+        name_width: int | None,
+        label=None,
+    ) -> int:
+        painter.text(cursor, list_col, heading, widgets.MUTED)
         painted = widgets.draw_share_rows(
             painter,
             cursor + 1,
-            col,
-            per_harness=projects,
+            list_col,
+            per_harness=entries,
             total=total,
-            width=width,
+            width=list_width,
             max_rows=min(10, bottom - cursor - 1),
-            index_of=None,
-            name_width=40,
+            index_of=index_of,
+            name_width=name_width,
+            label=label,
         )
-        cursor += 1 + painted + 1
+        return painted
+
+    if projects and cursor <= bottom - 1:
+        painted = paint_list(
+            "share by project",
+            {path: amount for path, amount in projects.items()},
+            project_col,
+            project_width,
+            None,
+            None,
+            label=_project_label,
+        )
+        if not two_columns:  # side by side, the columns share one band
+            cursor += 1 + painted + 1
     if per_harness and cursor <= bottom - 1:
-        painter.text(cursor, col, "share by harness", widgets.MUTED)
-        painted = widgets.draw_share_rows(
-            painter,
-            cursor + 1,
-            col,
-            per_harness=per_harness,
-            total=total,
-            width=width,
-            max_rows=min(10, bottom - cursor - 1),
-            index_of=lambda name: (
+        painted = paint_list(
+            "share by harness",
+            per_harness,
+            harness_col,
+            harness_width,
+            lambda name: (
                 HARNESS_NAMES.index(name) if name in HARNESS_NAMES else 0
             ),
-            name_width=14,
+            14 if two_columns else None,
         )
-        cursor += 1 + painted + 1
-        # keep the toggle state visible on wide screens too (the old legend
-        # carried it; here it is one quiet line)
-        off = [name for name in HARNESS_NAMES if name not in state.agents.active]
-        if off and cursor <= bottom:
-            if len(off) <= 3 and sum(len(name) for name in off) + 10 <= width:
-                note = "· " + ", ".join(off) + " (off)"
-            else:
-                note = f"· {len(off)} harnesses off (o/x/a)"
-            painter.text(cursor, col, note[: width - 2], widgets.MUTED)
+        if not two_columns:
+            cursor += 1 + painted + 1
+    # keep the toggle state visible on wide screens too (the old legend
+    # carried it; here it is one quiet line)
+    off = [name for name in HARNESS_NAMES if name not in state.agents.active]
+    if off and cursor <= bottom:
+        if len(off) <= 3 and sum(len(name) for name in off) + 10 <= width:
+            note = "· " + ", ".join(off) + " (off)"
+        else:
+            note = f"· {len(off)} harnesses off (o/x/a)"
+        painter.text(cursor, col, note[: width - 2], widgets.MUTED)
 
 
 def _harness_legend_entries(
@@ -942,7 +991,7 @@ def paint_models(
     _page_col, page_width = page_frame(columns)
     main_width = page_width - (rail_width + 3 if rail_width else 0)
 
-    plot_rows = chart_budget(rows)  # ~45% of the content height
+    plot_rows = chart_budget(rows, page_width=page_width)  # ~45% of the height
     image = paint_chart(
         painter,
         row=3,
@@ -984,9 +1033,9 @@ def paint_models(
         if name_width < 16:  # no room for the bar: the name wins
             share_width = 0
             name_width = table_width - fixed - gutter
-        name_width = max(min(name_width, 44), 14)
+        name_width = max(min(name_width, 56), 14)
         slack = table_width - (name_width + fixed + gutter + share_width)
-        share_width = min(18, share_width + max(slack, 0))
+        share_width = min(36, share_width + max(slack, 0))
         include_share = share_width > 0
         columns_spec = [
             ("model", name_width, 0),
@@ -1165,10 +1214,10 @@ def paint_tools(
     paint_heading(painter, columns, "tool outcomes (known-result calls only get rates)")
     page_col, page_width = page_frame(columns)
     if page_width >= 112:
-        tool_width = min(max(page_width - 100, 12), 34)
+        tool_width = min(max(page_width - 100, 12), 40)
         # the outcome bar absorbs the ultrawide slack (capped, so bars stay
         # readable instead of becoming billboards)
-        bar_width = min(24, max(12, page_width - tool_width - 84))
+        bar_width = min(28, max(12, page_width - tool_width - 84))
         columns_spec = [
             ("tool", tool_width, 0),
             ("category", 12, 0),
@@ -1261,7 +1310,7 @@ def paint_sessions(
         columns_spec = [
             ("when", 16, 0),
             ("harness", 12, 0),
-            ("project", max(min(page_width - 80, 72), 8), 0),
+            ("project", max(min(page_width - 80, 96), 8), 0),
             (">" + METRIC_COLUMN_LABELS.get(metric, "tokens"), 10, 1),
             ("vs max", 11, 0),
             (">events", 8, 1),

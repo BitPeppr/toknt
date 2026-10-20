@@ -49,9 +49,10 @@ From a checkout, `uv sync` and prefix commands with `uv run` (e.g.
 
 Running bare `toknt` in a terminal enters the explorer instead of printing a
 static dashboard. Every view opens with a bold heading and a hairline rule,
-so the content reads as one page. The page itself never stretches: it keeps
-a comfortable width (132 columns) and centers itself on wide terminals, so
-the margins on the left and the right always match.
+so the content reads as one page. The page fills the terminal up to 192
+columns and centers itself beyond that, so the margins on the left and the
+right always match — and a big monitor gets more content rather than
+stretched rows.
 
 It starts on the **contributions** view: every day of the chosen window
 laid out like GitHub's contribution graph, colored by total tokens, with
@@ -64,7 +65,9 @@ it inspects (**picked day** under the cursor with its per-harness amounts,
 then the **peak day**), while the right rail carries the **window total**
 with its daily average, the **share-by-project** list, the
 **share-by-harness** list (both with inline bars) and a quiet note about
-toggled-off harnesses. Narrow terminals fold back to a single column, and
+toggled-off harnesses. On a wide screen the rail splits into two columns —
+projects beside harnesses — and project paths show their tail
+(`…/Project/kbd`), which is what tells two projects apart. Narrow terminals fold back to a single column, and
 the legend there names the harnesses that carry data as colored swatches,
 keeps toggled-off ones visible (`codex (off)`) and collapses the idle ones
 into a single `+N idle` tail. A compact tab bar (view chips,

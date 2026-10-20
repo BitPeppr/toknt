@@ -371,6 +371,7 @@ def draw_share_rows(
     max_rows: int,
     index_of,
     name_width: int | None = None,
+    label=None,
 ) -> int:
     """'■ name ▮▮▮▮ 42%' per entry, one row each; rows painted returned.
 
@@ -379,7 +380,8 @@ def draw_share_rows(
     ``index_of`` maps a name to its series color index (the harness
     catalog lives in toknt.tui.data, which must not be imported from
     here); ``None`` paints the rows in the neutral color, which is what
-    projects want - they are not a series.
+    projects want - they are not a series. ``label`` rewrites the shown
+    name (project paths show their tail).
     """
     painted = 0
     ranked = sorted(per_harness.items(), key=lambda kv: -kv[1])
@@ -401,7 +403,8 @@ def draw_share_rows(
             else DEFAULT_ATTRS
         )
         painter.text(row + painted, col, "\u25a0", color)
-        painter.text(row + painted, col + 2, name[:name_width], MUTED)
+        shown_name = label(name) if label is not None else name
+        painter.text(row + painted, col + 2, shown_name[:name_width], MUTED)
         painter.text(
             row + painted, col + 3 + name_width, bar_glyphs(share, bar_width), color
         )
