@@ -16,7 +16,7 @@ import dataclasses
 import re
 import sqlite3
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -208,6 +208,16 @@ class UsageRow:
 _SCHEME_VALUES = frozenset(item.value for item in TokenScheme)
 
 
+def _count(value: int | None) -> int | None:
+    """A token count as stored; a negative one is corrupt data.
+
+    The adapters never write a negative count, so one in the database
+    means the row was written by something else. It reads as "not
+    reported" rather than crashing every reader.
+    """
+    return value if value is None or value >= 0 else None
+
+
 def fetch_usage_rows(conn: sqlite3.Connection, flt: UsageFilter) -> list[UsageRow]:
     where, params = _usage_where(flt)
     sql = (
@@ -232,11 +242,11 @@ def fetch_usage_rows(conn: sqlite3.Connection, flt: UsageFilter) -> list[UsageRo
                 session_id=row["session_id"],
                 scheme=scheme,
                 tokens=TokenCounts(
-                    input=row["input_tokens"],
-                    output=row["output_tokens"],
-                    reasoning=row["reasoning_tokens"],
-                    cache_read=row["cache_read_tokens"],
-                    cache_write=row["cache_write_tokens"],
+                    input=_count(row["input_tokens"]),
+                    output=_count(row["output_tokens"]),
+                    reasoning=_count(row["reasoning_tokens"]),
+                    cache_read=_count(row["cache_read_tokens"]),
+                    cache_write=_count(row["cache_write_tokens"]),
                 ),
                 cost_reported=row["cost_reported"],
             )
@@ -306,6 +316,11 @@ class Series:
     series: Mapping[str, tuple[int | float | None, ...]]
     dimension: str
     bucket: str = "day"
+    #: Display name -> the key the value was grouped under (the raw value,
+    #: or the canonical identity when spellings are merged). Two charts of
+    #: the same models can share one line-up through this map, so a unit
+    #: switch does not reshuffle the series and their colours.
+    identities: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
@@ -327,6 +342,19 @@ def _series_start(since_ms: int | None, first_ts_ms: int) -> int:
     return since_ms
 
 
+#: The bucket that holds the models left out of a top-N line-up. It is a
+#: key no model name can carry, so a model literally called "(other)" keeps
+#: its own series instead of being overwritten by the tail.
+_OTHER_KEY = "\x00other"
+
+
+def _tail_label(other_label: str, taken: Collection[str]) -> str:
+    """The tail's display name, kept clear of real model names."""
+    if other_label not in taken:
+        return other_label
+    return f"{other_label} models"
+
+
 def usage_series(
     conn: sqlite3.Connection,
     flt: UsageFilter,
@@ -338,15 +366,17 @@ def usage_series(
     top_n: int | None = 8,
     other_label: str = "(other)",
     canonical: Callable[[str], CanonicalName] | None = None,
+    rows: Sequence[UsageRow] | None = None,
 ) -> Series:
     """Per-bucket series of ``metric``, split by ``dimension``.
 
     ``canonical`` maps a raw dimension value to its canonical identity, so
     values that name the same thing (a model served by two providers) share
-    one series.
+    one series. ``rows`` may carry a pre-fetched row set so several
+    aggregations can share one read of the corpus.
     """
     tz = tz or default_timezone()
-    rows = fetch_usage_rows(conn, flt)
+    rows = rows if rows is not None else fetch_usage_rows(conn, flt)
     if not rows:
         return Series((), {}, dimension, bucket)
 
@@ -377,18 +407,19 @@ def usage_series(
         for key in keys[top_n:]:
             for bucket_ms, value in per_key[key].items():
                 merged[bucket_ms] += value
-        series_keys = top + [other_label]
-        per_key[other_label] = merged
+        series_keys = top + [_OTHER_KEY]
+        per_key[_OTHER_KEY] = merged
+        spellings[_OTHER_KEY] = [_tail_label(other_label, totals)]
     else:
         series_keys = keys
 
+    labels = {key: _display_key(key, spellings) for key in series_keys}
     series = {
-        _display_key(key, spellings): tuple(
-            per_key[key].get(bucket_ms) for bucket_ms in buckets
-        )
+        labels[key]: tuple(per_key[key].get(bucket_ms) for bucket_ms in buckets)
         for key in series_keys
     }
-    return Series(tuple(buckets), series, dimension, bucket)
+    identities = {labels[key]: key for key in series_keys}
+    return Series(tuple(buckets), series, dimension, bucket, identities)
 
 
 def cumulative(series: Series) -> Series:
@@ -425,25 +456,49 @@ class RatePoint:
     gap_ms: int
 
 
+def generated_tokens(row: UsageRow) -> int | None:
+    """Tokens the model generated, counted the way the source reports them.
+
+    Anthropic-style sources report reasoning *beside* output, so both are
+    generated. OpenAI-style sources report reasoning *inside* output, so
+    adding it would count the same tokens twice — a rate inflated by up to
+    80% on reasoning-heavy models. Unknown sources get output alone: the
+    floor that cannot double count. Prompt handling (input, cache) is
+    never part of what a rate measures.
+
+    ``None`` when the event reports no generated tokens at all.
+    """
+    output = metric_value(row, "output")
+    reasoning = metric_value(row, "reasoning")
+    if output is None and reasoning is None:
+        return None
+    if row.scheme is TokenScheme.OPENAI:
+        # reasoning ⊂ output: counting both would count the reasoning twice
+        return output if output is not None else reasoning
+    if row.scheme is TokenScheme.ANTHROPIC:
+        return (output or 0) + (reasoning or 0)
+    # unknown scheme: prefer output, never add the two
+    return output if output is not None else reasoning
+
+
 def rate_points(rows: Sequence[UsageRow]) -> list[RatePoint]:
     """Pair usage events with the gap to their session predecessor.
 
     ``rows`` arrives in ``ts`` order (``fetch_usage_rows`` sorts). Generated
-    tokens are output + reasoning: prompt handling is not what a rate
-    measures. An event reporting neither kind is skipped, which lets the
-    next gap span it; a session's first event has no predecessor. Gaps are
-    per ``(agent, session)`` — agents never share a session namespace. An
-    event without session attribution has no conversation to pair within
-    and drops out of every rate.
+    tokens follow the event's reporting scheme (``generated_tokens``): prompt
+    handling is not what a rate measures. An event reporting no generated
+    tokens is skipped, which lets the next gap span it; a session's first
+    event has no predecessor. Gaps are per ``(agent, session)`` — agents
+    never share a session namespace. An event without session attribution
+    has no conversation to pair within and drops out of every rate.
     """
     points: list[RatePoint] = []
     previous: dict[tuple[str, str], int] = {}
     for row in rows:
         if not row.session_id:
             continue  # unattributed: no session boundary, no predecessor, no rate
-        output = metric_value(row, "output")
-        reasoning = metric_value(row, "reasoning")
-        if output is None and reasoning is None:
+        generated = generated_tokens(row)
+        if generated is None:
             continue
         key = (row.agent, row.session_id)
         prev_ms = previous.get(key)
@@ -453,7 +508,6 @@ def rate_points(rows: Sequence[UsageRow]) -> list[RatePoint]:
         gap_ms = row.ts_ms - prev_ms
         if gap_ms <= 0 or gap_ms > MAX_RATE_GAP_MS:
             continue
-        generated = (output or 0) + (reasoning or 0)
         points.append(RatePoint(row.ts_ms, row.model, generated, gap_ms))
     return points
 
@@ -468,6 +522,7 @@ def model_rate_totals(
     flt: UsageFilter,
     *,
     canonical: Callable[[str], CanonicalName] | None = None,
+    rows: Sequence[UsageRow] | None = None,
 ) -> dict[str, float | None]:
     """Mean generation tokens/s per model identity over the whole window.
 
@@ -478,7 +533,8 @@ def model_rate_totals(
     never how long it took.
     """
     per_key: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    for point in rate_points(fetch_usage_rows(conn, flt)):
+    rows = rows if rows is not None else fetch_usage_rows(conn, flt)
+    for point in rate_points(rows):
         raw = point.model or "(unknown)"
         if canonical is None:
             key = raw
@@ -499,16 +555,20 @@ def generation_rate_series(
     top_n: int | None = 8,
     other_label: str = "(other)",
     canonical: Callable[[str], CanonicalName] | None = None,
+    lineup: Mapping[str, str] | None = None,
+    rows: Sequence[UsageRow] | None = None,
 ) -> Series:
     """Per-bucket mean generation tokens/s, split by model — ≈ estimate.
 
-    Grouping follows ``usage_series`` (top models by generated tokens keep
-    the two charts' line-up stable when switching), but each value is
-    Σ generated / Σ gap over that bucket's usable message pairs rather than
-    a sum, and merges spellings canonically when asked.
+    ``lineup`` is the display-name -> identity map of the token chart: the
+    rate chart then plots exactly the same models, in the same order, so
+    switching units changes the lines, not the colours. Without it the top
+    models are chosen by generated tokens. Each value is Σ generated / Σ gap
+    over that bucket's usable message pairs rather than a sum, and merges
+    spellings canonically when asked.
     """
     tz = tz or default_timezone()
-    rows = fetch_usage_rows(conn, flt)
+    rows = rows if rows is not None else fetch_usage_rows(conn, flt)
     points = rate_points(rows)
     if not points:
         return Series((), {}, "model", bucket)
@@ -533,20 +593,29 @@ def generation_rate_series(
         acc[1] += point.gap_ms
         totals[key] += point.generated_tokens
         spellings[key].append(label)
-    keys = sorted(totals, key=lambda key: (-totals[key], key))
-    if top_n is not None and len(keys) > top_n:
-        top = keys[:top_n]
+
+    if lineup is not None:
+        # the same models, in the same order, as the chart this one
+        # replaces: the tail absorbs everything else
+        order = list(lineup.values())
+        keys = [key for key in order if key in per_key]
+        rest = [key for key in totals if key not in keys]
+    else:
+        keys = sorted(totals, key=lambda key: (-totals[key], key))
+        rest = keys[top_n:] if top_n is not None else []
+        keys = keys[:top_n] if top_n is not None else keys
+    if rest:
         merged: dict[int, list[int]] = defaultdict(lambda: [0, 0])
-        for key in keys[top_n:]:
+        for key in rest:
             for bucket_ms, (num, ms) in per_key[key].items():
                 acc = merged[bucket_ms]
                 acc[0] += num
                 acc[1] += ms
-        series_keys = top + [other_label]
-        per_key[other_label] = merged
-        spellings[other_label].append(other_label)
+        series_keys = list(keys) + [_OTHER_KEY]
+        per_key[_OTHER_KEY] = merged
+        spellings[_OTHER_KEY] = [_tail_label(other_label, totals)]
     else:
-        series_keys = keys
+        series_keys = list(keys)
 
     def bucket_values(key: str) -> tuple[float | None, ...]:
         acc_by_bucket = per_key[key]
@@ -555,10 +624,10 @@ def generation_rate_series(
             for bucket_ms in buckets
         )
 
-    series = {
-        _display_key(key, spellings): bucket_values(key) for key in series_keys
-    }
-    return Series(tuple(buckets), series, "model", bucket)
+    labels = {key: _display_key(key, spellings) for key in series_keys}
+    series = {labels[key]: bucket_values(key) for key in series_keys}
+    identities = {labels[key]: key for key in series_keys}
+    return Series(tuple(buckets), series, "model", bucket, identities)
 
 
 def activity_series(
@@ -628,7 +697,7 @@ class BreakdownRow:
     #: spellings are merged. ``key`` is the label shown to the user, which
     #: need not equal it (a merged "muse-spark-1.3" is the identity
     #: "muse-spark-1-3") — join on this, never on the label.
-    identity: str = ""
+    identity: str
 
 
 def summarize(rows: Sequence[UsageRow]) -> TokenSummary:
@@ -671,6 +740,7 @@ def usage_breakdown(
     dimension: str = "model",
     canonical: Callable[[str], CanonicalName] | None = None,
     metric: str = "total",
+    rows: Sequence[UsageRow] | None = None,
 ) -> list[BreakdownRow]:
     """One row per distinct value of ``dimension``, ordered by total usage.
 
@@ -681,7 +751,7 @@ def usage_breakdown(
     the selected metric, so a breakdown of input tokens ranks and reports
     input tokens.
     """
-    rows = fetch_usage_rows(conn, flt)
+    rows = rows if rows is not None else fetch_usage_rows(conn, flt)
     grouped: dict[str, list[UsageRow]] = defaultdict(list)
     spellings: dict[str, list[str]] = defaultdict(list)
     for row in rows:

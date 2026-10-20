@@ -14,8 +14,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.models import at, usage
 from toknt.config import AppConfig
 from toknt.presentation import graphics
+from toknt.storage import ingestion
 from toknt.tui import widgets
 from toknt.tui.app import App
 from toknt.tui.keys import KeyEvent
@@ -92,6 +94,66 @@ class TestTitleStatus:
         assert last <= page_right
 
 
+class TestModelRailAlignment:
+    """The cache list and the model table end on the same row.
+
+    Two blocks of different lengths in the same column look accidental;
+    ending together makes the page read as one frame.
+    """
+
+    def _lines(self, rows: int = 30, cols: int = 160) -> list[str]:
+        writes: list[bytes] = []
+        app = App(AppConfig(), stdin_fd=0, stdout_fd=1)
+        app.term = SimpleNamespace(write=writes.append, writes=writes)
+        app.ctx = TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark")
+        app.painter.resize(rows, cols)
+        app.state.view = 1
+        app.paint()
+        screen = _screen(app, rows, cols)
+        return [line for _row, line in sorted(screen.items())]
+
+    @pytest.mark.parametrize("rows", [24, 30, 40])
+    def test_cache_list_ends_with_the_model_table(
+        self, rows: int, data_dir, seeded_conn
+    ) -> None:
+        # a corpus with more cache rows than the table can show: the list
+        # must stop where the table stops, not run past it
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id=f"usage:opencode:cache-{index:02d}",
+                    ts_ms=at(2026, 10, 2, 9) + index * 1000,
+                    model=f"cache-model-{index:02d}",
+                    input=100,
+                    output=50,
+                    reasoning=10,
+                    cache_read=5,
+                    cache_write=0,
+                )
+                for index in range(40)
+            ],
+        )
+        lines = self._lines(rows=rows)
+        heading = next(index for index, line in enumerate(lines) if "cache hit rate" in line)
+        rail_col = lines[heading].index("cache hit rate")
+        header = next(
+            index for index, line in enumerate(lines) if "tokens" in line and "events" in line
+        )
+        body = [
+            index
+            for index, line in enumerate(lines)
+            if index > header and "q quit" not in line and line[:rail_col].strip()
+        ]
+        cache = [
+            index
+            for index, line in enumerate(lines)
+            if index > heading and "q quit" not in line and line[rail_col:].strip()
+        ]
+        assert body and cache
+        assert max(cache) == max(body)
+
+
 class TestMonthLabels:
     def test_adjacent_months_never_overlap(self) -> None:
         painter = Painter()
@@ -135,6 +197,8 @@ class TestBarGlyphs:
         assert widgets.bar_glyphs(None, 3) == "   "
         assert widgets.bar_glyphs(1.5, 2) == "██"  # clips
         assert widgets.bar_glyphs(-0.5, 2) == "  "
+        # a NaN share is not a share: it must not read as a full bar
+        assert widgets.bar_glyphs(float("nan"), 4) == "    "
 
     def test_partial_block_fills_from_the_left(self) -> None:
         # a horizontal bar must not use the bottom-anchored ladder: that

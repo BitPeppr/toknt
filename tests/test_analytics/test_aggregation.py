@@ -483,6 +483,151 @@ class TestGenerationRate:
         rates = aggregation.model_rate_totals(conn, aggregation.UsageFilter())
         assert rates == {}  # zero-length gap is not a rate
 
+    def test_negative_counts_read_as_unreported(self, conn: sqlite3.Connection) -> None:
+        # a corrupt row must not crash every reader: a negative count is
+        # "not reported", never a number
+        seed(
+            conn,
+            [usage(id="u1", ts_ms=at(2026, 1, 5, 10, 0), output=50, reasoning=10)],
+        )
+        conn.execute("UPDATE usage_events SET output_tokens = -5")
+        rows = aggregation.fetch_usage_rows(conn, aggregation.UsageFilter())
+        assert rows[0].tokens.output is None
+        assert rows[0].tokens.reasoning == 10
+        # and the aggregations still work
+        assert aggregation.usage_breakdown(conn, aggregation.UsageFilter())
+
+    def test_generated_tokens_follow_the_reporting_scheme(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        # anthropic-style reports reasoning beside output, so both count;
+        # openai-style reports reasoning inside output, so counting it
+        # again inflates the rate by 80% on a reasoning-heavy model
+        base = at(2026, 1, 5, 10, 0)
+        seed(
+            conn,
+            [
+                usage(
+                    id="a1",
+                    ts_ms=base,
+                    session_id="anth",
+                    model="model-anth",
+                    scheme=TokenScheme.ANTHROPIC,
+                ),
+                usage(
+                    id="a2",
+                    ts_ms=base + 10_000,
+                    session_id="anth",
+                    model="model-anth",
+                    scheme=TokenScheme.ANTHROPIC,
+                    output=100,
+                    reasoning=80,
+                ),
+                usage(
+                    id="o1",
+                    ts_ms=base,
+                    session_id="oai",
+                    model="model-oai",
+                    scheme=TokenScheme.OPENAI,
+                ),
+                usage(
+                    id="o2",
+                    ts_ms=base + 10_000,
+                    session_id="oai",
+                    model="model-oai",
+                    scheme=TokenScheme.OPENAI,
+                    output=100,
+                    reasoning=80,
+                ),
+                usage(
+                    id="k1",
+                    ts_ms=base,
+                    session_id="unk",
+                    model="model-unk",
+                    scheme=TokenScheme.UNKNOWN,
+                ),
+                usage(
+                    id="k2",
+                    ts_ms=base + 10_000,
+                    session_id="unk",
+                    model="model-unk",
+                    scheme=TokenScheme.UNKNOWN,
+                    output=100,
+                    reasoning=80,
+                ),
+            ],
+        )
+        rates = aggregation.model_rate_totals(conn, aggregation.UsageFilter())
+        assert rates["model-anth"] == pytest.approx(18.0)  # 100 + 80 over 10 s
+        assert rates["model-oai"] == pytest.approx(10.0)  # reasoning is inside output
+        assert rates["model-unk"] == pytest.approx(10.0)  # unknown: output alone
+
+    def test_rate_chart_follows_the_token_charts_line_up(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        # the unit switch must move the lines, not the colours: the rate
+        # series plots the same models, in the same order
+        base = at(2026, 1, 5, 10, 0)
+        events = []
+        for index in range(10):
+            events.extend(
+                [
+                    usage(id=f"u{index}a", ts_ms=base + index * 1000, model=f"model-{index}"),
+                    usage(
+                        id=f"u{index}b",
+                        ts_ms=base + index * 1000 + 10_000,
+                        model=f"model-{index}",
+                        output=100,
+                        reasoning=0,
+                    ),
+                ]
+            )
+        seed(conn, events)
+        flt = aggregation.UsageFilter()
+        tokens = aggregation.usage_series(conn, flt, dimension="model", metric="total")
+        rates = aggregation.generation_rate_series(
+            conn, flt, lineup=tokens.identities
+        )
+        assert list(rates.series) == list(tokens.series)
+        assert rates.identities == tokens.identities
+
+    def test_a_model_named_other_keeps_its_own_series(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        # the tail of a top-N line-up must not overwrite a real model that
+        # happens to carry the same name
+        base = at(2026, 1, 5, 10, 0)
+        events = []
+        for index in range(10):
+            model = "(other)" if index == 0 else f"model-{index:02d}"
+            events.extend(
+                [
+                    usage(
+                        id=f"u{index}a",
+                        ts_ms=base + index * 1000,
+                        session_id=f"s{index}",
+                        model=model,
+                    ),
+                    usage(
+                        id=f"u{index}b",
+                        ts_ms=base + index * 1000 + 10_000,
+                        session_id=f"s{index}",
+                        model=model,
+                        output=1000,
+                        reasoning=0,
+                    ),
+                ]
+            )
+        seed(conn, events)
+        flt = aggregation.UsageFilter()
+        tokens = aggregation.usage_series(conn, flt, dimension="model", metric="total")
+        rates = aggregation.generation_rate_series(conn, flt, lineup=tokens.identities)
+        # the real "(other)" model keeps its own line, and the folded tail
+        # is labelled so the two never share a name
+        assert "(other)" in rates.series
+        assert rates.series["(other)"][0] == pytest.approx(100.0)
+        assert len(rates.series) == len(tokens.series)
+
     def test_events_without_a_session_never_pair(self, conn: sqlite3.Connection) -> None:
         # an adapter that cannot attribute a session leaves the event
         # unpaired: chaining those events would invent a conversation out

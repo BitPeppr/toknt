@@ -349,6 +349,8 @@ def bar_glyphs(fraction: float | None, width: int) -> str:
         return ""
     if fraction is None:
         return " " * width
+    if fraction != fraction:  # NaN: not a share, so not a full bar either
+        fraction = 0.0
     fraction = max(0.0, min(1.0, float(fraction)))
     units = fraction * width * 8
     full = int(units // 8)

@@ -45,9 +45,9 @@ HINT_PAIRS = (
     ("v", "metric"),
     ("m", "merge"),
     ("?", "help"),
+    ("h", "isolate"),
+    ("o/x/a", "harness"),
     ("p", "tok/s"),
-    ("h", "focus"),
-    ("o/x/a/h", "harness"),
     ("r", "rescan"),
     ("↑↓←→", "inspect"),
 )  # "q quit" is pinned to the right edge by paint_hints; pairs are ordered
@@ -978,6 +978,13 @@ def paint_models(
 ) -> ViewPaint:
     since_ms = since_for(state, now_ms)
     metric = current_metric(state)
+    token_series = analysis.model_series(
+        since_ms,
+        state.agents,
+        metric,
+        bucket=current_bucket(state),
+        merge=state.merge_models,
+    )
     if state.rate_mode:
         # the graph switches units; the table keeps the token breakdown
         series = analysis.model_rate_series(
@@ -985,16 +992,11 @@ def paint_models(
             state.agents,
             bucket=current_bucket(state),
             merge=state.merge_models,
+            lineup=token_series.identities,
         )
         heading = "≈ tokens/s by model — output+reasoning over message gaps"
     else:
-        series = analysis.model_series(
-            since_ms,
-            state.agents,
-            metric,
-            bucket=current_bucket(state),
-            merge=state.merge_models,
-        )
+        series = token_series
         heading = f"tokens by model — {aggregation.metric_label(metric)}"
     if state.merge_models:
         heading += " (merged across providers)"
@@ -1030,6 +1032,12 @@ def paint_models(
         ),
     )
     pie_image = None
+    # the table's extent decides how far the rail's cache list may run: the
+    # two blocks end on the same row, so the page reads as one frame
+    chart_bottom = 3 + plot_rows + 2 + (1 if rows >= 24 else 0)
+    table_max_rows = max(rows - 2 - chart_bottom, 0)
+    model_row_count = min(len(breakdown), 24, table_max_rows)
+    table_last_row = chart_bottom + model_row_count
     if rail_width:
         pie_image = _paint_model_side(
             painter,
@@ -1040,13 +1048,13 @@ def paint_models(
             row=3,
             rows=rows,
             ctx=ctx,
+            list_bottom=table_last_row,
             identity=(
                 state.window,
                 tuple(sorted(state.agents.active)),
                 round(sum(value for _key, value in shares)),
             ),
         )
-    chart_bottom = 3 + plot_rows + 2 + (1 if rows >= 24 else 0)
     table_width = main_width if rail_width else page_width
     include_share = False
     include_rate = False
@@ -1143,13 +1151,16 @@ def _paint_model_side(
     rows: int,
     ctx: TerminalContext,
     identity: tuple,
+    list_bottom: int | None = None,
 ) -> ImageRequest | None:
     """Right zone of the models view: donut, legend under it, cache bars.
 
     The blocks stack vertically with hard row guards, so the legend never
     lands on the donut and nothing spills into the hint bar; a breathing
     row separates each block. Terminals without image support get a small
-    stacked-block share ribbon instead of the bitmap donut.
+    stacked-block share ribbon instead of the bitmap donut. ``list_bottom``
+    is the row the model table ends on: the cache list stops there, so the
+    two blocks finish together instead of running past each other.
     """
     bottom = rows - 2
     pie_image: ImageRequest | None = None
@@ -1217,24 +1228,28 @@ def _paint_model_side(
     cursor += legend_lines + 1  # blank before the cache block
     # cache-rate bars below the legend block
     if cursor <= bottom and cache_rates:
-        painter.text(cursor, col, "cache hit rate", TITLE_ATTR)
-        shown = 0
-        budget = max(bottom - cursor - 1, 0)
-        for entry in cache_rates:
-            if entry.rate is None or shown >= budget:
-                continue
-            label = f"{entry.model[:12]:12}"
-            bar = widgets.bar_glyphs(entry.rate, 8)
-            painter.text(cursor + 1 + shown, col, label, widgets.MUTED)
-            painter.text(
-                cursor + 1 + shown,
-                col + 13,
-                f"{bar}{entry.rate * 100:>4.0f}%",
-                DEFAULT_ATTRS,
-            )
-            shown += 1
-        if shown == 0:
-            painter.text(cursor + 1, col, "no cache data in window", widgets.MUTED)
+        limit = bottom if list_bottom is None else min(bottom, list_bottom)
+        # the bars sit at cursor+1 .. cursor+budget, so a budget of
+        # limit - cursor puts the last one exactly on `limit`
+        budget = max(limit - cursor, 0)
+        if budget > 0:
+            painter.text(cursor, col, "cache hit rate", TITLE_ATTR)
+            shown = 0
+            for entry in cache_rates:
+                if entry.rate is None or shown >= budget:
+                    continue
+                label = f"{entry.model[:12]:12}"
+                bar = widgets.bar_glyphs(entry.rate, 8)
+                painter.text(cursor + 1 + shown, col, label, widgets.MUTED)
+                painter.text(
+                    cursor + 1 + shown,
+                    col + 13,
+                    f"{bar}{entry.rate * 100:>4.0f}%",
+                    DEFAULT_ATTRS,
+                )
+                shown += 1
+            if shown == 0:
+                painter.text(cursor + 1, col, "no cache data in window", widgets.MUTED)
     return pie_image
 
 
@@ -1423,11 +1438,13 @@ HELP_LINES = (
     "t       window: 3h/5h/1d/3d/7d/30d/90d/1y/all",
     "        (short windows auto-refresh)",
     "v       metric: total/input/output/reasoning/…",
+    "h       isolate one harness: all → each → all",
+    "        (o/x/a toggle harnesses one by one)",
     "p       tok/s ⇄ tokens (models chart, ≈ estimated)",
     "m       merge models served by different providers",
     "        (glm-5.3-flash == z-ai/glm-5.3-flash)",
     "o/x/a   toggle opencode · codex · claude_code",
-    "h       focus one harness (all ↔ each)",
+    "h       isolate one harness: all → each → all",
     "arrows  inspect day / pick table row",
     "r       rescan sources in the background",
     "g       graphics self-test (draws a test image)",

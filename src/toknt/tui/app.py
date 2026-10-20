@@ -179,22 +179,26 @@ class App:
                 index = int(char) - 1
                 if index < len(views.VIEW_TITLES):
                     self.state.view = index
+                    self.state.status = ""  # a note about the old view is stale
                     return True
             if char == "t":
                 self.state.window = (self.state.window + 1) % len(WINDOWS)
                 self.state.cursor_day = None
+                self.state.status = ""
                 if self._is_live_window():
                     # fresh data on arrival: scan soon, then keep ticking
                     self._next_auto_scan = time.time() * 1000 + LIVE_FIRST_SCAN_MS
                 return True
             if char == "v":
                 self.state.metric = (self.state.metric + 1) % len(views.METRICS)
+                self.state.status = ""
                 return True
             if char == "p":
                 if self.state.view != 1:  # only the models chart has rates
                     self.state.status = "tok/s applies to the models view"
                     return True  # repaint so the status shows
                 self.state.rate_mode = not self.state.rate_mode
+                self.state.status = ""
                 return True
             if char == "m":
                 self.state.merge_models = not self.state.merge_models

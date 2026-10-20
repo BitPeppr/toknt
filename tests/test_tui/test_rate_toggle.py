@@ -139,6 +139,15 @@ class TestRateToggleState:
         assert app.state.rate_mode is False
         assert "models" in app.state.status
 
+    def test_status_clears_when_the_view_changes(self, data_dir, seeded_conn) -> None:
+        # a note about the old view must not linger on the new one
+        app, _writes = _app()
+        app.apply_key(KeyEvent("char", "1"))
+        app.apply_key(KeyEvent("char", "p"))
+        assert app.state.status
+        app.apply_key(KeyEvent("char", "2"))  # models
+        assert app.state.status == ""
+
 
 class TestRateScreen:
     """136 columns: the table zone is wide enough for the ≈tok/s column."""

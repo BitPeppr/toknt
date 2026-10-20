@@ -10,6 +10,7 @@ here.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from toknt.analytics import aggregation, model_names, tool_metrics
@@ -138,6 +139,20 @@ class Analysis:
             ignore_projects=self.cfg.ignore_projects,
         )
 
+    def usage_rows(
+        self, since_ms: int, agents: AgentToggles
+    ) -> list[aggregation.UsageRow]:
+        """The window's usage events, read once and shared.
+
+        Building the per-event dataclasses costs ~120 ms on a real corpus,
+        and the models view wants the same rows for the chart, the table and
+        the rate estimate — one read, three answers.
+        """
+        key = ("usage_rows", since_ms, agents.active)
+        return self._memo(key, lambda: aggregation.fetch_usage_rows(
+            self.conn, self.usage_filter(since_ms, agents)
+        ))
+
     # -- view data -----------------------------------------------------------
 
     def daily(self, since_ms: int, agents: AgentToggles) -> DailyTotals:
@@ -166,6 +181,7 @@ class Analysis:
             tz=self.tz,
             top_n=8,
             canonical=model_names.canonical_model if merge else None,
+            rows=self.usage_rows(since_ms, agents),
         ))
 
     def model_rate_series(
@@ -175,9 +191,22 @@ class Analysis:
         bucket: str = "day",
         *,
         merge: bool = False,
+        lineup: Mapping[str, str] | None = None,
     ) -> aggregation.Series:
-        """≈ tokens/s per model per bucket (see aggregation for the method)."""
-        key = ("model_rate_series", since_ms, agents.active, bucket, merge)
+        """≈ tokens/s per model per bucket (see aggregation for the method).
+
+        ``lineup`` is the token chart's display-name -> identity map: the
+        rate chart then plots the same models in the same order, so the
+        unit switch moves the lines, not the colours.
+        """
+        key = (
+            "model_rate_series",
+            since_ms,
+            agents.active,
+            bucket,
+            merge,
+            tuple(sorted(lineup.items())) if lineup else None,
+        )
         return self._memo(key, lambda: aggregation.generation_rate_series(
             self.conn,
             self.usage_filter(since_ms, agents),
@@ -185,6 +214,8 @@ class Analysis:
             tz=self.tz,
             top_n=8,
             canonical=model_names.canonical_model if merge else None,
+            lineup=lineup,
+            rows=self.usage_rows(since_ms, agents),
         ))
 
     def model_rows(
@@ -200,6 +231,7 @@ class Analysis:
             self.conn, self.usage_filter(since_ms, agents),
             canonical=model_names.canonical_model if merge else None,
             metric=metric,
+            rows=self.usage_rows(since_ms, agents),
         )))
 
     def model_rate_totals(
@@ -209,6 +241,7 @@ class Analysis:
         return self._memo(key, lambda: aggregation.model_rate_totals(
             self.conn, self.usage_filter(since_ms, agents),
             canonical=model_names.canonical_model if merge else None,
+            rows=self.usage_rows(since_ms, agents),
         ))
 
     def project_rows(
