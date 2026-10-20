@@ -35,6 +35,7 @@ from collections.abc import Mapping, Sequence
 
 __all__ = [
     "SERIES_PALETTE",
+    "nice_ceiling",
     "Canvas",
     "detect_backend",
     "encode_placement",
@@ -46,15 +47,18 @@ __all__ = [
 ]
 
 
-# Okabe–Ito subset: colorblind-safe, mid-luminance, legible on dark and light
-# terminal backgrounds alike.
+# One muted, mid-luminance palette for every chart path: the bitmap charts
+# (PNG/sixel/iTerm2/kitty) and the text charts (Braille, share strips, legend
+# swatches) import this same tuple, so a series has one colour everywhere.
+# Hues separate the series while saturation and lightness stay in a narrow
+# band; the values remain legible on dark and light terminal backgrounds.
 SERIES_PALETTE: tuple[int, ...] = (
-    0x56B4E9,  # sky
-    0xE69F00,  # orange
-    0x0072B2,  # blue
-    0x009E73,  # green
-    0xCC79A7,  # pink
-    0xD55E00,  # vermillion
+    0x4E8FA8,  # dusty blue
+    0xBC8A3C,  # ochre
+    0x3F6F8F,  # steel blue
+    0x4F8A72,  # sage
+    0xA9748C,  # mauve
+    0xB2633F,  # terracotta
     0x8C8C8C,  # grey
 )
 
@@ -313,7 +317,7 @@ def encode_placement(
     raise ValueError(f"unknown graphics backend {backend!r}")
 
 
-def _nice_ceiling(value: float) -> float:
+def nice_ceiling(value: float) -> float:
     """Round an axis maximum up to a human number (1/2/5 × 10**k)."""
     if value <= 0:
         return 1.0
@@ -335,15 +339,18 @@ def chart_png(
     kind: str,  # "line" | "bar" | "stacked"
     series: Mapping[str, list[float | None]],
     palette: Sequence[int] = SERIES_PALETTE,
+    y_max: float | None = None,
 ) -> tuple[bytes, bytes]:
     """Render series data as an anti-aliased transparent PNG + RGBA bitmap.
 
-    Axis maxima use 1/2/5 ceilings, gridlines are faint white, lines get a
-    soft 3px stroke. ``None`` values cut lines into segments and leave bar
-    slots empty, matching the character-cell renderer's gap semantics.
-    Words such as titles and tick labels are NOT drawn here: text renders as
-    real terminal text around the image, where it stays crisp wherever the
-    terminal lives.
+    Axis maxima use 1/2/5 ceilings unless the caller passes ``y_max``; the
+    TUI passes the same maximum the cell renderer uses, so the bitmap and
+    the Braille chart cannot disagree about the scale. Gridlines are faint
+    white, lines get a soft 3px stroke. ``None`` values cut lines into
+    segments and leave bar slots empty, matching the character-cell
+    renderer's gap semantics. Words such as titles and tick labels are NOT
+    drawn here: text renders as real terminal text around the image, where
+    it stays crisp wherever the terminal lives.
     """
     canvas = Canvas(width, height)
     blank = bytes(width * height * 4)
@@ -352,7 +359,7 @@ def chart_png(
         return png_encode(width, height, blank), blank
 
     pad = 4.0
-    y_max = _nice_ceiling(max(all_values))
+    axis_max = y_max if y_max and y_max > 0 else nice_ceiling(max(all_values))
     plot_w = float(width) - 2 * pad
     plot_h = float(height) - 2 * pad
     count = max(len(values) for values in series.values())
@@ -369,7 +376,7 @@ def chart_png(
     canvas.draw_line(pad, base_y, width - pad, base_y, baseline, thickness=1)
 
     def y_of(value: float) -> float:
-        return pad + (1 - value / y_max) * plot_h
+        return pad + (1 - value / axis_max) * plot_h
 
     if kind == "line":
         for n, key in enumerate(series):
@@ -394,7 +401,7 @@ def chart_png(
             for index, value in enumerate(series[key]):
                 if value is None:
                     continue
-                h_px = plot_h * value / y_max
+                h_px = plot_h * value / axis_max
                 x = pad + index * step + step * 0.12
                 slot_w = max(step * 0.76, 1.0)
                 if stacked:

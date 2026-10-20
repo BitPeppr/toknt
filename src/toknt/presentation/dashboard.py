@@ -138,6 +138,7 @@ def _print_trend(
         title=f"Token usage per {bucket} by model",
         ylabel="tokens",
         tz=tz,
+        log=True,
     )
     if chart:
         console.print(chart)

@@ -9,10 +9,12 @@ labels under charts always render as real terminal text.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
 from toknt.analytics import aggregation
+from toknt.presentation.graphics import nice_ceiling
 from toknt.tui import widgets
 from toknt.tui.data import (
     DEFAULT_WINDOW,
@@ -137,11 +139,6 @@ def current_bucket(state: AppState) -> str:
 
 def current_metric(state: AppState) -> str:
     return METRICS[state.metric]
-
-
-def metric_total(series: aggregation.Series) -> float:
-    values = [value for values in series.series.values() for value in values if value is not None]
-    return float(max(values)) if values else 0.0
 
 
 def harnesses_line(state: AppState) -> str:
@@ -274,8 +271,15 @@ def paint_chart(
     series: aggregation.Series,
     ctx: TerminalContext,
     identity: tuple = (),
+    log_scale: bool = False,
 ) -> ImageRequest | None:
     """Bitmap chart when possible, Braille lines otherwise + text tick labels.
+
+    ``log_scale`` applies ``log1p`` to the plotted values: token counts span
+    several orders of magnitude, and a 5M-token model should not collapse
+    into the baseline beside a 250M one. Speed charts pass ``False``; their
+    linear spacing is meaningful. The transform lives here, before either
+    renderer, so the bitmap and Braille paths agree.
 
     The returned request, when not ``None``, must be emitted by the app right
     after the text frame flushes (the payload carries its own positioning).
@@ -293,6 +297,27 @@ def paint_chart(
         (name, [float(v) if v is not None else None for v in points])
         for name, points in series.series.items()
     ]
+    if log_scale:
+        values = [
+            (
+                name,
+                [
+                    None if value is None else math.log1p(max(value, 0.0))
+                    for value in points
+                ],
+            )
+            for name, points in values
+        ]
+    y_max = max(
+        (value for _name, points in values for value in points if value is not None),
+        default=0.0,
+    )
+    # One axis maximum for both renderers: a 1/2/5 ceiling for the linear
+    # scale, the exact maximum for the log scale (a ceiling there would
+    # waste half the plot on a scale that is already compressed).
+    axis_max = y_max if log_scale else nice_ceiling(y_max)
+    if axis_max <= 0:
+        axis_max = 1.0
     plot_rows = height_rows - 1  # keep one row for tick labels
 
     if ctx.backend in ("kitty", "iterm2", "sixel") and plot_rows >= 6:
@@ -313,11 +338,12 @@ def paint_chart(
             ctx.cell_h,
             pixel_w,
             pixel_h,
+            log_scale,
             _fingerprints(series),
         )
         request = _CHART_CACHE.get(cache_key)
         if request is None:
-            png, rgba = _chart_png(pixel_w, pixel_h, values)
+            png, rgba = _chart_png(pixel_w, pixel_h, values, axis_max)
             request = ImageRequest(
                 row=row,
                 col=col,
@@ -337,7 +363,7 @@ def paint_chart(
         )
 
     widgets.draw_braille_lines(
-        painter, row, col, width_columns, plot_rows, values, metric_total(series)
+        painter, row, col, width_columns, plot_rows, values, axis_max
     )
     return _finish_chart(
         painter, row, col, width_columns, height_rows, series, None
@@ -1022,7 +1048,9 @@ def paint_models(
         heading = "tokens per second by model"
     else:
         series = token_series
-        heading = f"tokens by model — {aggregation.metric_label(metric)}"
+        heading = (
+            f"tokens by model — {aggregation.metric_label(metric)} · log scale"
+        )
     if state.merge_models:
         heading += " (merged across providers)"
     paint_heading(painter, columns, heading)
@@ -1078,6 +1106,7 @@ def paint_models(
                 tuple(sorted(state.agents.active)),
                 state.rate_mode,
             ),
+            log_scale=not state.rate_mode,
         )
     pie_image = None
     chart_bottom = 3 + plot_rows + 2 + (1 if rows >= 24 else 0)
@@ -1226,20 +1255,32 @@ def _paint_model_side(
     # one quiet row between the rail's upper blocks and the cache heading
     rail_bottom = min(bottom, list_top - 2)
     pie_image: ImageRequest | None = None
-    # chips are 15 columns wide (swatch + 12-char name): a 28–42-column
-    # zone fits one or two per row
-    chip_width = 15
+    # chips are 14 columns wide (swatch + 11-char name + a gap): a
+    # 28–42-column zone fits two or three per row. Two columns keep every
+    # share labelled even when the rate column borrows the rail down to 28.
+    chip_width = 14
     per_row = max(width // chip_width, 1)
     wanted_legend = (len(shares) + per_row - 1) // per_row if shares else 0
     if shares and rail_bottom >= row:
-        use_image = ctx.backend in ("kitty", "iterm2", "sixel") and rows >= 16
+        room = max(rail_bottom - row + 1, 0)
+        min_pie_rows = 6
+        # A donut that cannot leave room for the complete legend is not
+        # useful: use the text ribbon instead, exactly as a non-image
+        # terminal does. Otherwise every slice has a visible name.
+        use_image = (
+            ctx.backend in ("kitty", "iterm2", "sixel")
+            and rows >= 16
+            and room >= wanted_legend + 1 + min_pie_rows
+        )
         if use_image:
             from toknt.presentation import graphics
 
-            room = max(rail_bottom - row + 1, 0)
-            # keep a blank row under the donut and at least six image rows
-            legend_lines = min(wanted_legend, max(room - 1 - 6, 0))
-            pie_rows = max(6, min(13, rows // 3, room - legend_lines - 1))
+            # keep a blank row under the donut; all legend lines are paid
+            # for before the donut gets any extra height
+            legend_lines = wanted_legend
+            pie_rows = max(
+                min_pie_rows, min(13, rows // 3, room - legend_lines - 1)
+            )
             square_px = min((width - 1) * ctx.cell_w, pie_rows * ctx.cell_h)
             pie_cols = max(square_px // max(ctx.cell_w, 1), 6)
             pie_image_rows = max(square_px // max(ctx.cell_h, 1), 1)
@@ -1267,10 +1308,12 @@ def _paint_model_side(
             )
             cursor = row + pie_image_rows + 1  # one breathing row under the donut
         else:
-            # no image transport: a colored stacked ribbon still shows the mix
+            # no image transport (or too little height for donut + legend):
+            # a colored stacked ribbon still shows the mix. The legend gets
+            # first claim on the rows, so no slice loses its name.
             total_shares = sum(value for _key, value in shares) or 1.0
             ribbon_width = max(width - 2, 8)
-            ribbon_rows = min(3, max(rail_bottom - row + 1, 0))
+            ribbon_rows = min(3, max(room - wanted_legend, 0))
             for ribbon_row in range(row, row + ribbon_rows):
                 x = col
                 for index, (_key, value) in enumerate(shares):
@@ -1294,7 +1337,7 @@ def _paint_model_side(
             if paint_row > rail_bottom:
                 break
             widgets.agent_swatch(
-                painter, paint_row, col + slot * chip_width, index, key[:12]
+                painter, paint_row, col + slot * chip_width, index, key[:11]
             )
     # cache-rate bars: one row per table row, in the table's order
     if cache_rows and list_top <= bottom:
@@ -1392,11 +1435,20 @@ def paint_tools(
                 ]
             )
         body.append(cells)
-    offset = max(0, min(state.tool_row, len(body) - (rows - 4)))
+    # A harness/window change can leave the stored cursor past a shorter
+    # list; clamp the painted selection so the highlighted row and the note
+    # cannot disagree. The next arrow press writes the clamped value back.
+    selected_row = min(state.tool_row, len(body) - 1) if body else None
+    visible = max(rows - 6, 1)
+    # The highlight walks down the visible rows and the window follows only
+    # once the cursor reaches the bottom edge.
+    offset = 0
+    if body:
+        offset = max(0, min((selected_row or 0) - visible + 1, len(body) - visible))
     widgets.draw_table(
         painter, 3, page_col, columns_spec, body,
-        selected=state.tool_row,
-        max_rows=rows - 6,
+        selected=selected_row,
+        max_rows=visible,
         row_offset=offset,
     )
     return ViewPaint()
@@ -1421,7 +1473,11 @@ def paint_sessions(
         merge=state.merge_models,
         metric=metric,
     )
-    paint_heading(painter, columns, "sessions by tokens (arrows to inspect)")
+    paint_heading(
+        painter,
+        columns,
+        f"sessions by {aggregation.metric_label(metric)} (arrows to inspect)",
+    )
     page_col, page_width = page_frame(columns)
     peak_tokens = max(
         (entry.summary.total or 0 for entry in ranked), default=0
@@ -1482,14 +1538,21 @@ def paint_sessions(
     # cap the visible window like the models table: a wall of rows is not
     # more useful than a readable list with a bottom margin
     visible = min(TABLE_ROW_CAP, max(rows - 7, 1))
-    offset = max(0, min(state.session_row, len(body) - visible))
+    # The stored row may predate a harness/metric change. Paint the clamp so
+    # the selected row and its note always describe the same session.
+    selected_row = min(state.session_row, len(body) - 1) if body else None
+    # The highlight walks down the visible rows; the window only scrolls
+    # once the cursor reaches the bottom edge.
+    offset = 0
+    if body:
+        offset = max(0, min((selected_row or 0) - visible + 1, len(body) - visible))
     widgets.draw_table(
         painter, 3, page_col, columns_spec, body,
-        selected=state.session_row,
+        selected=selected_row,
         max_rows=visible,
         row_offset=offset,
     )
-    selected = ranked[min(state.session_row, len(ranked) - 1)] if ranked else None
+    selected = ranked[selected_row] if selected_row is not None else None
     if selected is not None:
         notes = [f"{selected.agent}", selected.project or "—"]
         if selected.models:
@@ -1508,7 +1571,7 @@ HELP_LINES = (
     "t       window: 3h/5h/1d/3d/7d/30d/90d/1y/all",
     "        (short windows auto-refresh)",
     "v       metric: total/input/output/reasoning/…",
-    "p       tok/s ⇄ tokens (models chart)",
+    "p       tok/s ⇄ tokens (tokens: log, rate: linear)",
     "m       merge models served by different providers",
     "        (glm-5.3-flash == z-ai/glm-5.3-flash)",
     "h       isolate one harness: all → each with data → all",
@@ -1553,12 +1616,17 @@ def _cost_text(value: float | None) -> str:
 
 
 def _chart_png(
-    pixel_w: int, pixel_h: int, values: list[tuple[str, list[float | None]]]
+    pixel_w: int,
+    pixel_h: int,
+    values: list[tuple[str, list[float | None]]],
+    y_max: float | None = None,
 ):
     from toknt.presentation import graphics
 
     series = {name: point_list for name, point_list in values}
-    return graphics.chart_png(width=pixel_w, height=pixel_h, kind="line", series=series)
+    return graphics.chart_png(
+        width=pixel_w, height=pixel_h, kind="line", series=series, y_max=y_max
+    )
 
 
 def graphics_encode(

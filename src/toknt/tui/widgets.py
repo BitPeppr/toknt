@@ -483,7 +483,7 @@ def draw_table(
 
 
 def agent_swatch(painter: Painter, row: int, col: int, index: int, label: str) -> None:
-    """'■ label' legend entry in the series' color (colorblind-safe hex set)."""
+    """'■ label' legend entry in the series' muted palette color."""
     color = SERIES_HEX[index % len(SERIES_HEX)]
     painter.text(row, col, "■", Attr(color, None, 0))
     painter.text(row, col + 2, label, MUTED)

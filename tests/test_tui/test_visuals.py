@@ -19,11 +19,11 @@ from toknt.config import AppConfig
 from toknt.models.usage import TokenScheme
 from toknt.presentation import graphics
 from toknt.storage import ingestion
-from toknt.tui import widgets
+from toknt.tui import views, widgets
 from toknt.tui.app import App
 from toknt.tui.keys import KeyEvent
 from toknt.tui.painter import Painter
-from toknt.tui.style import heat_ramp
+from toknt.tui.style import SERIES_HEX, heat_ramp
 from toknt.tui.views import AppState, TerminalContext, title_row
 
 
@@ -226,6 +226,64 @@ class TestModelRailAlignment:
         assert "50%" in known_row[rail_col:]
 
 
+class TestSeriesPalette:
+    def test_text_and_raster_share_one_palette(self) -> None:
+        """A legend swatch and its bitmap line must be the same colour."""
+        assert SERIES_HEX is graphics.SERIES_PALETTE
+        assert graphics.SERIES_PALETTE[0] == 0x4E8FA8
+        assert 0x56B4E9 not in graphics.SERIES_PALETTE  # the old bright sky
+
+
+class TestModelRailLegend:
+    """Every donut slice keeps a name, even when the rail is narrow."""
+
+    @staticmethod
+    def _rail(rows: int, list_top: int) -> tuple[str, object]:
+        painter = Painter()
+        painter.resize(rows, 100)
+        shares = [(f"model-{index:02d}", float(10 - index)) for index in range(6)]
+        image = views._paint_model_side(
+            painter,
+            70,
+            28,
+            shares,
+            [],
+            row=3,
+            rows=rows,
+            ctx=TerminalContext(
+                backend="kitty", cell_w=10, cell_h=20, theme="dark"
+            ),
+            identity=(),
+            list_top=list_top,
+        )
+        text = "\n".join("".join(cell.char for cell in line) for line in painter.buffer)
+        return text, image
+
+    @pytest.mark.parametrize(("rows", "list_top"), [(24, 15), (16, 10)])
+    def test_all_six_shares_are_named(
+        self, rows: int, list_top: int
+    ) -> None:
+        text, image = self._rail(rows, list_top)
+        for index in range(6):
+            assert f"model-{index:02d}" in text
+        if rows == 24:
+            assert image is not None  # the donut still fits above the cache
+        else:
+            assert image is None  # too short: the ribbon replaces the donut
+
+    def test_narrow_rail_uses_two_columns_not_four_rows(self) -> None:
+        text, _image = self._rail(24, 15)
+        legend_rows = [
+            line
+            for line in text.splitlines()
+            if "model-00" in line or "model-02" in line or "model-04" in line
+        ]
+        assert len(legend_rows) == 3
+        assert all(
+            line.count("model-") == 2 for line in legend_rows
+        )
+
+
 class TestSessionsBottomMargin:
     def test_tall_terminal_keeps_a_bottom_margin_and_scrolls(
         self, data_dir, seeded_conn
@@ -265,6 +323,52 @@ class TestSessionsBottomMargin:
         screen = _screen(app, 40, 120)
         first = min(row for row, line in screen.items() if time_re.search(line))
         assert "session-29" not in screen[first]  # newest row has scrolled off
+
+
+class TestSessionsScroll:
+    """The highlight walks down the rows; the list follows at the edge."""
+
+    @staticmethod
+    def _selected_row(app: App) -> int:
+        for row in range(4, app.painter.rows):
+            if any(cell.mask & 1 for cell in app.painter.buffer[row] if cell.char.strip()):
+                return row
+        raise AssertionError("no selected row was painted")
+
+    def test_the_window_scrolls_only_when_the_cursor_reaches_the_edge(
+        self, data_dir, seeded_conn
+    ) -> None:
+        base = at(2026, 10, 10, 9, 0)
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id=f"usage:opencode:scroll-{index:02d}",
+                    ts_ms=base + index * 60_000,
+                    session_id=f"ses_scroll_{index:02d}",
+                    project=f"/work/scroll-{index:02d}",
+                    model="model-a",
+                )
+                for index in range(40)
+            ],
+        )
+        app = App(AppConfig(), stdin_fd=0, stdout_fd=1)
+        app.term = SimpleNamespace(write=lambda _data: None, writes=[])
+        app.ctx = TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark")
+        app.painter.resize(40, 120)
+        app.state.view = 3
+        app.paint()
+        assert self._selected_row(app) == 4  # the first body row
+        app.apply_key(KeyEvent("down"))
+        app.paint()
+        # the highlight moves; the list does not scroll under it
+        assert self._selected_row(app) == 5
+        for _ in range(23):
+            app.apply_key(KeyEvent("down"))
+        app.paint()
+        # now the cursor is at the bottom edge and the window follows
+        assert self._selected_row(app) == 27
+        app.conn.close()
 
 
 class TestToolsOutcomes:

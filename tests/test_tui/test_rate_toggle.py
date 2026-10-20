@@ -174,12 +174,15 @@ class TestRateScreen:
         app, writes = _app()
         app.apply_key(KeyEvent("char", "2"))
         app.paint()
-        assert "tokens by model" in _joined(app, writes)
-        assert "tokens per second" not in _joined(app, writes)
+        joined = _joined(app, writes)
+        assert "tokens by model" in joined
+        assert "log scale" in joined
+        assert "tokens per second" not in joined
         app.apply_key(KeyEvent("char", "p"))
         app.paint()
         joined = _joined(app, writes)
         assert "tokens per second by model" in joined
+        assert "log scale" not in joined  # speed keeps a linear axis
         assert "output+reasoning" not in joined
         assert "tokens by model" not in joined
 

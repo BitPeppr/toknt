@@ -186,6 +186,7 @@ class TestMetricFollows:
         app.apply_key(KeyEvent("char", "v"))
         app.paint()
         joined = "\n".join(_rows(app))
+        assert "sessions by input tokens" in joined
         assert "input" in joined
 
 

@@ -83,7 +83,7 @@ bottom bar pairs each key with a dim action label.
 | `1`–`4`                    | contributions · tokens by model · tools · sessions                  |
 | `t`                        | cycle window: `3h → 5h → 1d → 3d → 7d → 30d → 90d → 1y → all`    |
 | `v`                        | cycle metric: total · input · output · reasoning · cached           |
-| `p`                        | models view: chart unit tokens ⇄ tok/s (derived from message gaps)  |
+| `p`                        | models view: chart unit tokens ⇄ tok/s (derived from message gaps); token charts use a log scale, tok/s stays linear |
 | `m`                        | merge the same model served by different providers (one row each)   |
 | `h`                        | isolate one harness at a time: all → each (that has data) → all   |
 | `←` `→` `↑` `↓`            | move the day cursor (contributions) or table selection              |
@@ -121,6 +121,9 @@ switching to `input` re-ranks the table by input tokens and reports input
 tokens in every column. Pressing **`p`** trades the chart's unit: instead
 of tokens per bucket it draws the derived tok/s rate per bucket, keeping
 the same models in the same order (only the lines move, never the colours).
+Token charts use a **logarithmic y-axis** — a 5M-token model stays legible
+next to a 250M one instead of collapsing into the baseline — while the
+tok/s chart stays linear, because a rate is a ratio, not a magnitude.
 Piping or scripting (non-tty stdout) gets the old static print; `toknt
 overview` forces that dashboard, and `TOKNT_TUI=0` disables the
 interactive boot entirely.
@@ -416,7 +419,9 @@ Quality codes: `unparsable_row`, `unreadable_file`, `missing_usage`,
 
 Tool success rates use only calls with a known final outcome; `pending` and
 `unknown` calls are excluded from the denominator and stay visible in the
-outcome columns, so a success rate can never flatter the data.
+outcome columns, so a success rate can never flatter the data. (In the TUI's
+tools table the `unknown` column counts both — a pending call has no result
+yet, which is the same "not a known outcome" bucket.)
 
 ## Privacy
 
@@ -474,7 +479,11 @@ scans can never inflate totals.
   need roughly 80+ columns for full legibility. Time-series charts start at
   your earliest stored event (even with `--since all`) and, once the span
   exceeds one year, tick labels carry the two-digit year so the chronology
-  stays unambiguous.
+  stays unambiguous. Token **line** charts (`toknt overview`, `toknt usage
+  --chart line`) plot on a log10 axis with token-unit tick labels (1K, 1M,
+  …) so heavy hitters cannot flatten everyone else; `--chart bar|stacked`
+  and rate/percentage charts stay linear so bar lengths keep their
+  proportional meaning.
 
 ## Development
 

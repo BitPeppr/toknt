@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -33,7 +34,7 @@ def _series(*values: float):
 
 
 def _fake_png(monkeypatch: pytest.MonkeyPatch, calls: list[tuple[int, int]]) -> None:
-    def fake_png(pixel_w: int, pixel_h: int, values):
+    def fake_png(pixel_w: int, pixel_h: int, values, y_max: float | None = None):
         calls.append((pixel_w, pixel_h))
         blank = bytes(pixel_w * pixel_h * 4)
         return png_encode(pixel_w, pixel_h, blank), blank
@@ -95,6 +96,92 @@ class TestChartCache:
         for mark in range(10):
             paint_chart(painter, series=_series(mark, mark), identity=(), **common)
         assert len(views._CHART_CACHE) <= views._CHART_CACHE_LIMIT
+
+
+class TestLogScale:
+    """Token charts span orders of magnitude; speed charts stay linear."""
+
+    def _span(self, log_scale: bool) -> int:
+        painter = Painter()
+        painter.resize(30, 120)
+        painter.frame()
+        paint_chart(
+            painter,
+            row=2,
+            col=2,
+            width_columns=90,
+            height_rows=12,
+            series=_series(5_000_000, 250_000_000),
+            ctx=TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark"),
+            log_scale=log_scale,
+        )
+        rows = [
+            row
+            for row in range(2, 13)
+            if any("⠀" <= cell.char <= "⣿" for cell in painter.buffer[row])
+        ]
+        assert rows
+        return max(rows) - min(rows)
+
+    def test_log_keeps_small_models_off_the_baseline(self) -> None:
+        linear = self._span(False)
+        logarithmic = self._span(True)
+        assert logarithmic < linear
+        assert logarithmic > 0
+
+    def test_log_values_are_transformed_before_rasterizing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(views, "_CHART_CACHE", {})
+        seen: list[tuple[list[tuple[str, list[float | None]]], float | None]] = []
+
+        def fake_png(pixel_w: int, pixel_h: int, values, y_max: float | None = None):
+            seen.append((values, y_max))
+            blank = bytes(pixel_w * pixel_h * 4)
+            return png_encode(pixel_w, pixel_h, blank), blank
+
+        monkeypatch.setattr(views, "_chart_png", fake_png)
+        painter = Painter()
+        painter.resize(30, 120)
+        paint_chart(
+            painter,
+            row=2,
+            col=2,
+            width_columns=90,
+            height_rows=12,
+            series=_series(5_000_000, 250_000_000),
+            ctx=TerminalContext(backend="kitty", cell_w=10, cell_h=20, theme="dark"),
+            log_scale=True,
+        )
+        values, y_max = seen[0]
+        points = values[0][1]
+        assert points[0] == pytest.approx(math.log1p(5_000_000))
+        assert points[1] == pytest.approx(math.log1p(250_000_000))
+        assert max(points) < 20
+        # the axis maximum is the exact maximum: a ceiling would leave the
+        # top half of the plot empty on an already compressed scale
+        assert y_max == pytest.approx(max(points))
+
+    def test_log_flag_is_part_of_the_image_cache_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(views, "_CHART_CACHE", {})
+        calls: list[tuple[int, int]] = []
+        _fake_png(monkeypatch, calls)
+        painter = Painter()
+        painter.resize(30, 120)
+        common = dict(
+            row=2,
+            col=2,
+            width_columns=90,
+            height_rows=12,
+            series=_series(5_000_000, 250_000_000),
+            ctx=TerminalContext(backend="kitty", cell_w=10, cell_h=20, theme="dark"),
+            identity=(),
+        )
+        paint_chart(painter, log_scale=False, **common)
+        paint_chart(painter, log_scale=True, **common)
+        assert len(calls) == 2
 
 
 class TestChrome:

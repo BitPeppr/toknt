@@ -6,6 +6,12 @@ keys, arrows, Home/End, delete and page up/down. Anything unrecognised
 degrades to ``'none'`` — the app ignores keys it does not bind, so exotic
 escape sequences stay harmless. ``decode`` is pure (given a continuation
 source); ``read_key`` is its I/O wrapper.
+
+A sequence split across reads can arrive after the short continuation wait.
+Rather than guess, the unread prefix is kept per fd and prepended to the
+next read; that is what stops a late ``ESC [`` + ``H`` from becoming the
+printable ``h`` and cycling the harness filter. The buffer is dropped on EOF
+or when a hostile sequence exceeds ``_MAX_CSI`` bytes.
 """
 
 from __future__ import annotations
@@ -17,6 +23,10 @@ from dataclasses import dataclass
 __all__ = ["KeyEvent", "read_key", "decode"]
 
 _ESC_CONT_WAIT = 0.05  # seconds to wait for the rest of an escape sequence
+_MAX_CSI = 256  # reject parameter spam that never supplies a final byte
+
+#: fd -> raw sequence prefix (including ESC) waiting for its final byte.
+_PENDING: dict[int, bytes] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,18 +42,22 @@ def read_key(fd: int, *, poll_wait: float = 0.0) -> KeyEvent | None:
     """Return the next key event, or ``None`` when none is queued."""
     first = _read_bytes(fd, poll_wait)
     if not first:
+        if first is None:  # EOF: a stale prefix can never be completed
+            _PENDING.pop(fd, None)
         return None
     return decode(first, fd=fd)
 
 
-def _read_bytes(fd: int, wait: float) -> bytes:
+def _read_bytes(fd: int, wait: float) -> bytes | None:
+    """Bytes from ``fd``; ``b""`` on timeout, ``None`` on EOF/error."""
     readable, _, _ = select.select([fd], [], [], wait)
     if not readable:
         return b""
     try:
-        return os.read(fd, 64)
+        data = os.read(fd, 64)
     except OSError:
-        return b""
+        return None
+    return data or None
 
 
 _ARROW_SEQUENCES = {
@@ -60,6 +74,10 @@ _ARROW_SEQUENCES = {
 
 def decode(data: bytes, *, fd: int | None = None) -> KeyEvent:
     """Decode one event from ``data``; ``fd`` supplies continuation bytes."""
+    if fd is not None:
+        pending = _PENDING.pop(fd, None)
+        if pending:
+            data = pending + data
     if not data:
         return KeyEvent("none")
     if data[0] == 0x1B:
@@ -99,12 +117,25 @@ def _complete_csi(body: bytes, fd: int | None) -> bytes | None:
     data = body
     index = 1  # skip the '[' introducer
     while True:
+        if len(data) > _MAX_CSI:
+            # no final byte in a plausible sequence: drop the junk instead
+            # of spinning forever on a hostile/looping stream
+            if fd is not None:
+                _PENDING.pop(fd, None)
+            return None
         while index < len(data):
             if 0x40 <= data[index] <= 0x7E:
                 return data[: index + 1]
             index += 1
-        more = _read_bytes(fd, _ESC_CONT_WAIT) if fd is not None else b""
+        more = _read_bytes(fd, _ESC_CONT_WAIT) if fd is not None else None
+        if more is None:
+            if fd is not None:
+                _PENDING.pop(fd, None)
+            return None
         if not more:
+            if fd is not None:
+                # keep the complete prefix, ESC included, for the next read
+                _PENDING[fd] = b"\x1b" + data
             return None
         data += more
 
@@ -113,8 +144,14 @@ def _complete_ss3(body: bytes, fd: int | None) -> bytes | None:
     """Return ESC-O plus its one final byte, reading it if necessary."""
     data = body
     while len(data) < 2:
-        more = _read_bytes(fd, _ESC_CONT_WAIT) if fd is not None else b""
+        more = _read_bytes(fd, _ESC_CONT_WAIT) if fd is not None else None
+        if more is None:
+            if fd is not None:
+                _PENDING.pop(fd, None)
+            return None
         if not more:
+            if fd is not None:
+                _PENDING[fd] = b"\x1b" + data
             return None
         data += more
     return data[:2]
@@ -123,6 +160,10 @@ def _complete_ss3(body: bytes, fd: int | None) -> bytes | None:
 def _decode_escape(body: bytes, fd: int | None) -> KeyEvent:
     if not body:
         more = _read_bytes(fd, _ESC_CONT_WAIT) if fd is not None else b""
+        if more is None:
+            if fd is not None:
+                _PENDING.pop(fd, None)
+            return KeyEvent("esc")
         if more:
             # a sequence that starts after the ESC belongs to the escape;
             # any other byte keeps the old "ESC then key" behaviour

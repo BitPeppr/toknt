@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
-from toknt.tui.keys import KeyEvent, decode, read_key
+from toknt.tui.keys import _ESC_CONT_WAIT, KeyEvent, decode, read_key
 
 
 @pytest.mark.parametrize(
@@ -95,6 +96,42 @@ def test_incomplete_sequence_is_swallowed_not_typed() -> None:
         assert decode(b"\x1b[", fd=read_fd) == KeyEvent("none")
     finally:
         os.close(read_fd)
+
+
+@pytest.mark.parametrize(
+    ("final", "expected"),
+    [(b"A", KeyEvent("up")), (b"H", KeyEvent("home"))],
+)
+def test_late_split_sequence_is_reassembled_across_reads(
+    final: bytes, expected: KeyEvent
+) -> None:
+    """A final byte after the 50 ms wait must not become a printable key.
+
+    An 80 ms split used to leave ``A``/``H`` in the tty buffer; the next read
+    decoded them as characters. The prefix is now carried to the next read.
+    """
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"\x1b[")
+        assert read_key(read_fd, poll_wait=0.01) == KeyEvent("none")
+        time.sleep(_ESC_CONT_WAIT + 0.1)
+        os.write(write_fd, final)
+        assert read_key(read_fd, poll_wait=0.5) == expected
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_hostile_csi_without_a_final_byte_is_dropped() -> None:
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"\x1b[" + b"0" * 300)
+        started = time.monotonic()
+        assert read_key(read_fd, poll_wait=0.5) == KeyEvent("none")
+        assert time.monotonic() - started < 1.0
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
 
 
 def test_read_key_none_on_quiet_fd() -> None:

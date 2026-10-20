@@ -434,7 +434,12 @@ def usage(
             title = f"Requests per {bucket}"
             ylabel = "requests"
         if chart == "line":
-            rendered = charts.line_chart(renamed, title=title, ylabel=ylabel, tz=tz)
+            # token counts span orders of magnitude; the request line stays
+            # linear because it is a count, not a token quantity
+            rendered = charts.line_chart(
+                renamed, title=title, ylabel=ylabel, tz=tz,
+                log=metric != "requests",
+            )
         elif chart == "bar":
             rendered = charts.bar_chart(renamed, title=title, ylabel=ylabel, tz=tz)
         else:

@@ -16,6 +16,7 @@ series.
 
 from __future__ import annotations
 
+import math
 import shutil
 from collections.abc import Sequence
 from datetime import datetime, tzinfo
@@ -100,6 +101,33 @@ def nice_scale(max_value: float) -> tuple[float, str]:
     return 1.0, ""
 
 
+def _log_tick_label(value: float) -> str:
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:g}B"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:g}M"
+    if value >= 1_000:
+        return f"{value / 1_000:g}K"
+    return f"{value:g}"
+
+
+def _log_axis(max_value: float) -> tuple[float, list[int], list[str]]:
+    """Top, tick positions and labels for a log10-transformed token axis.
+
+    Plotext's own ``yscale('log')`` raises on zeros and does not accept
+    ``None`` gaps. Transforming the values first keeps missing buckets as
+    gaps, makes zero days disappear rather than crash, and lets the tick
+    labels stay in token units (1K, 1M, …).
+    """
+    top = max(1.0, float(math.ceil(max_value)))
+    step = max(1, math.ceil(top / 4))
+    positions = list(range(0, int(top) + 1, step))
+    if positions[-1] != int(top):
+        positions.append(int(top))
+    labels = [_log_tick_label(10.0**position) for position in positions]
+    return top, positions, labels
+
+
 def line_chart(
     series: Series,
     *,
@@ -107,10 +135,16 @@ def line_chart(
     ylabel: str,
     tz: tzinfo | None = None,
     percent: bool = False,
+    log: bool = False,
     width: int | None = None,
     height: int = _LINE_HEIGHT,
 ) -> str | None:
-    """Multi-series line chart; ``None`` values render as gaps."""
+    """Multi-series line chart; ``None`` values render as gaps.
+
+    ``log`` plots token counts on a log10 axis so a 5M-token series remains
+    legible next to a 250M one. Rates and percentages stay linear: the
+    ``percent`` flag wins over ``log``.
+    """
     if series.is_empty:
         return None
     tz = tz or default_timezone()
@@ -124,11 +158,48 @@ def line_chart(
     }
     if not plotted:
         return None
-    max_value = max(
-        (value for values in plotted.values() for value in values if value is not None),
-        default=0,
-    )
-    divisor, suffix = (1.0, "") if percent else nice_scale(max_value)
+    use_log = log and not percent
+    if use_log:
+        # Zero on a log axis is undefined; leave it as a gap instead of
+        # inventing a small positive floor. A series that is all zero drops
+        # out just like an all-gap series.
+        plotted = {
+            key: [
+                None if value is None or value <= 0 else math.log10(value)
+                for value in values
+            ]
+            for key, values in plotted.items()
+        }
+        plotted = {
+            key: values
+            for key, values in plotted.items()
+            if any(value is not None for value in values)
+        }
+        if not plotted:
+            return None
+        max_value = max(
+            (
+                value
+                for values in plotted.values()
+                for value in values
+                if value is not None
+            ),
+            default=0,
+        )
+        top, y_positions, y_labels = _log_axis(max_value)
+        divisor, suffix = 1.0, ""
+    else:
+        max_value = max(
+            (
+                value
+                for values in plotted.values()
+                for value in values
+                if value is not None
+            ),
+            default=0,
+        )
+        divisor, suffix = (1.0, "") if percent else nice_scale(max_value)
+        top = y_positions = y_labels = None
 
     _figure(width, height)
     for key, values in plotted.items():
@@ -139,7 +210,12 @@ def line_chart(
     ticks, tick_labels = _tick_axes(series.buckets, series.bucket, tz)
     plt.xticks(ticks, tick_labels)
     plt.title(title)
-    plt.ylabel(f"{ylabel} ({suffix})" if suffix else ylabel)
+    if use_log:
+        plt.ylim(0, (top or 1.0) * 1.05)
+        plt.yticks(y_positions or [], y_labels or [])
+        plt.ylabel(f"{ylabel} (log)")
+    else:
+        plt.ylabel(f"{ylabel} ({suffix})" if suffix else ylabel)
     return _shut()
 
 

@@ -206,6 +206,23 @@ class TestRenderer:
             painted = sum(1 for index in range(3, len(rgba), 4) if rgba[index])
             assert painted > 100
 
+    def test_explicit_axis_max_is_respected(self) -> None:
+        # the TUI passes the same maximum to the bitmap and to the cell
+        # renderer; a bigger maximum must push the line down
+        def _top_row(rgba: bytes) -> int:
+            for index in range(0, len(rgba), 4):
+                if rgba[index + 3]:
+                    return index // 4 // 40
+            raise AssertionError("nothing was painted")
+
+        _png, tight = chart_png(
+            width=40, height=40, kind="line", series={"a": [1.0, 1.0]}, y_max=1.0
+        )
+        _png, loose = chart_png(
+            width=40, height=40, kind="line", series={"a": [1.0, 1.0]}, y_max=4.0
+        )
+        assert _top_row(tight) < _top_row(loose)
+
     def test_empty_series_is_blank_png(self) -> None:
         png, rgba = chart_png(width=60, height=30, kind="line", series={})
         assert len(png) > 0
