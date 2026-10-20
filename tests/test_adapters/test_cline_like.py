@@ -115,6 +115,28 @@ class TestModernCli:
         assert event["token_scheme"] == "anthropic"
         assert event["reasoning_tokens"] == 0  # billed inside output
 
+    def test_usage_events_carry_the_task_session_id(
+        self, conn: sqlite3.Connection, source: DiscoveredSource
+    ) -> None:
+        # Cline's messages carry no session id of their own — the task's id
+        # is the conversation. Without it the events float free of their
+        # session: the session count reads zero and no rate can be measured
+        # between two messages of the same conversation.
+        write_session(
+            Path(source.location),
+            "s1",
+            manifest=manifest("s1"),
+            messages=[
+                assistant("m1", metrics=METRICS, ts=T0),
+                assistant("m2", metrics=METRICS, ts=T0 + 10_000),
+            ],
+        )
+        scan(conn, source)
+        events = one(conn, "SELECT session_id FROM usage_events ORDER BY ts_ms")
+        assert [event["session_id"] for event in events] == ["s1", "s1"]
+        # the events now join the session row they belong to
+        assert one(conn, "SELECT COUNT(*) FROM sessions WHERE session_id='s1'")[0][0] == 1
+
     def test_tool_result_entries_classify_outcomes(
         self, conn: sqlite3.Connection, source: DiscoveredSource
     ) -> None:

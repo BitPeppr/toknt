@@ -279,6 +279,9 @@ class ClineSessionsAdapter(Adapter):
         event_ts: list[int] = []
         rows = 0
         skipped = 0
+        # the conversation these messages belong to: the manifest names it,
+        # and the task directory is its fallback
+        task_session_id = opt_str(manifest.get("session_id")) or session_id
 
         messages = as_dict(payload).get("messages")
         for message in messages if isinstance(messages, list) else []:
@@ -301,6 +304,7 @@ class ClineSessionsAdapter(Adapter):
                         self._usage_event(
                             message, metrics, message_id=message_id, ts_ms=ts_ms,
                             model=model, provider=provider,
+                            session_id=task_session_id,
                         )
                     )
                     event_ts.append(ts_ms)
@@ -363,6 +367,7 @@ class ClineSessionsAdapter(Adapter):
         ts_ms: int,
         model: str | None,
         provider: str | None,
+        session_id: str,
     ) -> UsageEvent:
         counts = TokenCounts(
             input=token_int(metrics.get("inputTokens")),
@@ -379,7 +384,13 @@ class ClineSessionsAdapter(Adapter):
                 agent=self.agent,
                 source_id=self.source_id,
                 source_event_id=message_id,
-                session_id=opt_str(message.get("sessionId")),
+                # Cline's messages carry no session id of their own; the
+                # task's own id (the manifest's, else the directory name)
+                # is the conversation these messages belong to, and it is
+                # the same id the session record is filed under — without
+                # it the events float free of their session and no rate
+                # can be measured between them
+                session_id=opt_str(message.get("sessionId")) or session_id,
                 model=model,
                 provider=provider,
                 ts_ms=ts_ms,
