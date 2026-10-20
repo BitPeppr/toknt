@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.support.models import at, usage
+from tests.support.models import at, tool, usage
 from toknt.config import AppConfig
 from toknt.models.usage import TokenScheme
 from toknt.presentation import graphics
@@ -185,6 +185,41 @@ class TestModelRailAlignment:
             model = lines[index][:rail_col].split()[0]
             label = lines[index][rail_col:].split()[0]
             assert model.startswith(label), (model, label, lines[index])
+
+    def test_every_share_keeps_a_legend_chip_in_the_narrow_rail(
+        self, data_dir, seeded_conn
+    ) -> None:
+        # the narrowest rail (the tok/s column borrows width from it) must
+        # still name every slice of the donut
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id=f"usage:opencode:share-{index:02d}",
+                    ts_ms=at(2026, 10, 2, 9) + index * 1000,
+                    model=f"share-model-{index:02d}",
+                    input=100 + index,
+                    output=50,
+                )
+                for index in range(6)
+            ],
+        )
+        writes: list[bytes] = []
+        app = App(AppConfig(), stdin_fd=0, stdout_fd=1)
+        app.term = SimpleNamespace(write=writes.append, writes=writes)
+        app.ctx = TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark")
+        app.painter.resize(24, 100)
+        app.state.view = 1
+        app.paint()
+        screen = _screen(app, 24, 100)
+        lines = [line for _row, line in sorted(screen.items())]
+        heading = next(
+            index for index, line in enumerate(lines) if "cache hit rate" in line
+        )
+        rail_col = lines[heading].index("cache hit rate")
+        chips = sum(line[rail_col:].count("■") for line in lines[:heading])
+        assert chips == 6
+        app.conn.close()
 
     def test_model_without_cache_reporting_gets_a_dash_in_its_row(
         self, data_dir, seeded_conn
@@ -372,6 +407,33 @@ class TestSessionsScroll:
 
 
 class TestToolsOutcomes:
+    def test_the_cursor_never_walks_past_the_painted_rows(
+        self, data_dir, seeded_conn
+    ) -> None:
+        # the table paints a capped number of rows; the cursor must not
+        # walk into the invisible tail
+        base = at(2026, 10, 10, 9, 0)
+        ingestion.upsert_tool_events(
+            seeded_conn,
+            [
+                tool(
+                    id=f"tool:opencode:many-{index:02d}",
+                    ts_ms=base + index * 1000,
+                    tool_name=f"tool-{index:02d}",
+                )
+                for index in range(70)
+            ],
+        )
+        app = App(AppConfig(), stdin_fd=0, stdout_fd=1)
+        app.term = SimpleNamespace(write=lambda _data: None, writes=[])
+        app.ctx = TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark")
+        app.painter.resize(30, 160)
+        app.state.view = 2
+        for _ in range(80):
+            app.apply_key(KeyEvent("down"))
+        assert app.state.tool_row == views.TOOL_ROW_CAP - 1
+        app.conn.close()
+
     def test_pending_calls_are_counted_in_the_unknown_column(
         self, data_dir, seeded_conn
     ) -> None:

@@ -162,6 +162,20 @@ class TestLogScale:
         # top half of the plot empty on an already compressed scale
         assert y_max == pytest.approx(max(points))
 
+    def test_non_finite_values_do_not_crash_the_chart(self) -> None:
+        painter = Painter()
+        painter.resize(30, 120)
+        paint_chart(
+            painter,
+            row=2,
+            col=2,
+            width_columns=90,
+            height_rows=12,
+            series=_series(float("nan"), float("inf"), 5.0),
+            ctx=TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark"),
+            log_scale=True,
+        )
+
     def test_log_flag_is_part_of_the_image_cache_key(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

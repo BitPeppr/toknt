@@ -40,6 +40,10 @@ RATE_TABLE_WIDTH = 72
 #: is less readable than a list with breathing room below it.
 TABLE_ROW_CAP = 24
 
+#: The tools table paints at most this many rows; the cursor never walks
+#: past what is actually on screen.
+TOOL_ROW_CAP = 64
+
 #: Short column labels so a table can follow the selected metric.
 METRIC_COLUMN_LABELS = {
     "total": "tokens",
@@ -294,7 +298,15 @@ def paint_chart(
         return None
 
     values: list[tuple[str, list[float | None]]] = [
-        (name, [float(v) if v is not None else None for v in points])
+        (
+            name,
+            [
+                float(v)
+                if v is not None and math.isfinite(float(v))
+                else None
+                for v in points
+            ],
+        )
         for name, points in series.series.items()
     ]
     if log_scale:
@@ -1406,7 +1418,7 @@ def paint_tools(
         ]
     detailed = page_width >= 112
     body: list[list[str]] = []
-    for outcome in outcomes[:64]:
+    for outcome in outcomes[:TOOL_ROW_CAP]:
         rate = outcome.success_rate
         cells = [
             outcome.tool[:tool_width],

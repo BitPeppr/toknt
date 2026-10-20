@@ -111,21 +111,33 @@ def _log_tick_label(value: float) -> str:
     return f"{value:g}"
 
 
-def _log_axis(max_value: float) -> tuple[float, list[int], list[str]]:
-    """Top, tick positions and labels for a log10-transformed token axis.
+def _log_axis(raw_max: float, max_log: float) -> tuple[float, list[float], list[str]]:
+    """Top, tick positions and labels for a log-scaled token axis.
 
     Plotext's own ``yscale('log')`` raises on zeros and does not accept
-    ``None`` gaps. Transforming the values first keeps missing buckets as
-    gaps, makes zero days disappear rather than crash, and lets the tick
-    labels stay in token units (1K, 1M, …).
+    ``None`` gaps. The values are transformed with ``log1p`` first (the same
+    transform the TUI uses), so a zero bucket sits on the baseline instead
+    of breaking the line, and the tick labels stay in token units
+    (1K, 1M, …) rather than log exponents.
     """
-    top = max(1.0, float(math.ceil(max_value)))
-    step = max(1, math.ceil(top / 4))
-    positions = list(range(0, int(top) + 1, step))
-    if positions[-1] != int(top):
-        positions.append(int(top))
-    labels = [_log_tick_label(10.0**position) for position in positions]
+    if raw_max <= 1:
+        exponents = [0]
+    else:
+        highest = int(math.floor(math.log10(raw_max)))
+        step = max(1, math.ceil((highest + 1) / 5))
+        exponents = list(range(0, highest + 1, step))
+    positions = [math.log1p(10.0**exponent) for exponent in exponents]
+    labels = [_log_tick_label(10.0**exponent) for exponent in exponents]
+    top = max(max_log * 1.05, 1.0)
     return top, positions, labels
+
+
+def _finite(value: float | None) -> float | None:
+    """The value when it is a real number, else ``None`` (a gap)."""
+    if value is None:
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def line_chart(
@@ -141,7 +153,7 @@ def line_chart(
 ) -> str | None:
     """Multi-series line chart; ``None`` values render as gaps.
 
-    ``log`` plots token counts on a log10 axis so a 5M-token series remains
+    ``log`` plots token counts on a log axis so a 5M-token series remains
     legible next to a 250M one. Rates and percentages stay linear: the
     ``percent`` flag wins over ``log``.
     """
@@ -152,20 +164,27 @@ def line_chart(
     # plotext 5.3.2 crashes on series without a single value (legend path);
     # skip those instead of plotting an invisible all-gap line.
     plotted = {
-        key: values
+        key: [_finite(value) for value in values]
         for key, values in series.series.items()
+    }
+    plotted = {
+        key: values
+        for key, values in plotted.items()
         if any(value is not None for value in values)
     }
     if not plotted:
         return None
     use_log = log and not percent
+    raw_max = max(
+        (value for values in plotted.values() for value in values if value is not None),
+        default=0,
+    )
     if use_log:
-        # Zero on a log axis is undefined; leave it as a gap instead of
-        # inventing a small positive floor. A series that is all zero drops
-        # out just like an all-gap series.
+        # log1p keeps a zero bucket on the baseline (the same transform the
+        # TUI charts use) instead of breaking the line or inventing a floor
         plotted = {
             key: [
-                None if value is None or value <= 0 else math.log10(value)
+                None if value is None else math.log1p(max(value, 0.0))
                 for value in values
             ]
             for key, values in plotted.items()
@@ -177,7 +196,7 @@ def line_chart(
         }
         if not plotted:
             return None
-        max_value = max(
+        max_log = max(
             (
                 value
                 for values in plotted.values()
@@ -186,18 +205,10 @@ def line_chart(
             ),
             default=0,
         )
-        top, y_positions, y_labels = _log_axis(max_value)
+        top, y_positions, y_labels = _log_axis(raw_max, max_log)
         divisor, suffix = 1.0, ""
     else:
-        max_value = max(
-            (
-                value
-                for values in plotted.values()
-                for value in values
-                if value is not None
-            ),
-            default=0,
-        )
+        max_value = raw_max
         divisor, suffix = (1.0, "") if percent else nice_scale(max_value)
         top = y_positions = y_labels = None
 
@@ -242,7 +253,10 @@ def bar_chart(
 
     _figure(width, height)
     data = [
-        [0 if value is None else value / divisor for value in values]
+        [
+            0 if _finite(value) is None else _finite(value) / divisor  # type: ignore[operator]
+            for value in values
+        ]
         for values in series.series.values()
     ]
     names = [str(key)[:24] for key in series.series]

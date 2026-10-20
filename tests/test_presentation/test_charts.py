@@ -89,7 +89,7 @@ class TestChartRendering:
         # labels stay in token units, not log exponents
         assert "1M" in out and ("100M" in out or "1B" in out)
 
-    def test_log_chart_keeps_zero_buckets_as_gaps(self) -> None:
+    def test_log_chart_keeps_zero_buckets_on_the_baseline(self) -> None:
         from toknt.analytics.aggregation import Series
         from toknt.presentation.charts import line_chart
 
@@ -101,6 +101,22 @@ class TestChartRendering:
         )
         out = line_chart(series, title="t", ylabel="tokens", tz=UTC, log=True)
         assert out and "(log)" in out
+        # a zero is a real value on the baseline, not a missing bucket:
+        # the series stays in the legend
+        assert "alpha" in out
+
+    def test_non_finite_values_do_not_crash_the_chart(self) -> None:
+        from toknt.analytics.aggregation import Series
+        from toknt.presentation.charts import line_chart
+
+        series = Series(
+            tuple(_daily_buckets(4)),
+            {"alpha": (float("nan"), float("inf"), 1.0, 10.0)},
+            "model",
+            "day",
+        )
+        out = line_chart(series, title="t", ylabel="tokens", tz=UTC, log=True)
+        assert out is not None
 
     def test_grouped_bar_chart_renders(self) -> None:
         from toknt.presentation.charts import bar_chart

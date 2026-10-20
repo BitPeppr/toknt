@@ -456,6 +456,9 @@ class App:
             return True
         if state.view == 2:
             count = len(self.analysis.tool_rows(self._since(), state.agents))
+            # the table paints a capped number of rows: the cursor must not
+            # walk past the rows that are actually on screen
+            count = min(count, views.TOOL_ROW_CAP)
             state.tool_row = _clamp(
                 state.tool_row + (1 if name == "down" else -1), 0, max(count - 1, 0)
             )

@@ -10,23 +10,36 @@ source); ``read_key`` is its I/O wrapper.
 A sequence split across reads can arrive after the short continuation wait.
 Rather than guess, the unread prefix is kept per fd and prepended to the
 next read; that is what stops a late ``ESC [`` + ``H`` from becoming the
-printable ``h`` and cycling the harness filter. The buffer is dropped on EOF
-or when a hostile sequence exceeds ``_MAX_CSI`` bytes.
+printable ``h`` and cycling the harness filter.
+
+A stalled prefix is ambiguous: the next byte is either the sequence's final
+byte or a real keypress. The decoder resolves it in favour of the sequence
+(its final byte completes a known key), but only when the combination is
+recognised; a byte that cannot complete the sequence is decoded as the
+keystroke it is, so a stalled ``ESC [`` never eats the ``q`` that follows
+it. The prefix also expires: a sequence interrupted more than
+``_PENDING_TTL`` seconds ago is abandoned, and EOF drops it outright.
 """
 
 from __future__ import annotations
 
 import os
 import select
+import time
 from dataclasses import dataclass
 
 __all__ = ["KeyEvent", "read_key", "decode"]
 
 _ESC_CONT_WAIT = 0.05  # seconds to wait for the rest of an escape sequence
 _MAX_CSI = 256  # reject parameter spam that never supplies a final byte
+_PENDING_TTL = 2.0  # seconds after which a stalled sequence is abandoned
 
-#: fd -> raw sequence prefix (including ESC) waiting for its final byte.
-_PENDING: dict[int, bytes] = {}
+#: fd -> (raw sequence prefix including ESC, when it was stashed).
+_PENDING: dict[int, tuple[bytes, float]] = {}
+
+#: Prefixes that carry no parameter yet: a byte that cannot complete them
+#: is a keystroke, not a sequence final.
+_BARE_PREFIXES = (b"\x1b[", b"\x1bO")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +88,28 @@ _ARROW_SEQUENCES = {
 def decode(data: bytes, *, fd: int | None = None) -> KeyEvent:
     """Decode one event from ``data``; ``fd`` supplies continuation bytes."""
     if fd is not None:
-        pending = _PENDING.pop(fd, None)
-        if pending:
-            data = pending + data
+        entry = _PENDING.pop(fd, None)
+        if entry is not None:
+            prefix, since = entry
+            if time.monotonic() - since <= _PENDING_TTL:
+                event = _decode_bytes(prefix + data, fd)
+                if (
+                    event.name == "none"
+                    and prefix in _BARE_PREFIXES
+                    and len(data) == 1
+                    and 0x40 <= data[0] <= 0x7E
+                ):
+                    # the interrupted sequence never completed and the byte
+                    # cannot be one of its parameters: it is a keystroke
+                    return _decode_bytes(data, None)
+                return event
+            # the prefix is too old to be part of this read: drop it and
+            # decode what arrived on its own
+    return _decode_bytes(data, fd)
+
+
+def _decode_bytes(data: bytes, fd: int | None) -> KeyEvent:
+    """Decode one event; ``fd`` supplies continuation bytes."""
     if not data:
         return KeyEvent("none")
     if data[0] == 0x1B:
@@ -135,7 +167,7 @@ def _complete_csi(body: bytes, fd: int | None) -> bytes | None:
         if not more:
             if fd is not None:
                 # keep the complete prefix, ESC included, for the next read
-                _PENDING[fd] = b"\x1b" + data
+                _PENDING[fd] = (b"\x1b" + data, time.monotonic())
             return None
         data += more
 
@@ -151,7 +183,7 @@ def _complete_ss3(body: bytes, fd: int | None) -> bytes | None:
             return None
         if not more:
             if fd is not None:
-                _PENDING[fd] = b"\x1b" + data
+                _PENDING[fd] = (b"\x1b" + data, time.monotonic())
             return None
         data += more
     return data[:2]

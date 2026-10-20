@@ -33,6 +33,8 @@ import time
 import zlib
 from collections.abc import Mapping, Sequence
 
+from toknt.palette import SERIES_PALETTE as _SERIES_PALETTE
+
 __all__ = [
     "SERIES_PALETTE",
     "nice_ceiling",
@@ -50,17 +52,7 @@ __all__ = [
 # One muted, mid-luminance palette for every chart path: the bitmap charts
 # (PNG/sixel/iTerm2/kitty) and the text charts (Braille, share strips, legend
 # swatches) import this same tuple, so a series has one colour everywhere.
-# Hues separate the series while saturation and lightness stay in a narrow
-# band; the values remain legible on dark and light terminal backgrounds.
-SERIES_PALETTE: tuple[int, ...] = (
-    0x4E8FA8,  # dusty blue
-    0xBC8A3C,  # ochre
-    0x3F6F8F,  # steel blue
-    0x4F8A72,  # sage
-    0xA9748C,  # mauve
-    0xB2633F,  # terracotta
-    0x8C8C8C,  # grey
-)
+SERIES_PALETTE = _SERIES_PALETTE
 
 
 # ----------------------------------------------------------------- detection

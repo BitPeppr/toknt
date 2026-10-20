@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 
-from toknt.presentation.graphics import SERIES_PALETTE
+from toknt.palette import SERIES_PALETTE
 
 
 def char_width(char: str) -> int:

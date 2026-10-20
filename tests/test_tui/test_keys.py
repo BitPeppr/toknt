@@ -128,7 +128,51 @@ def test_hostile_csi_without_a_final_byte_is_dropped() -> None:
         os.write(write_fd, b"\x1b[" + b"0" * 300)
         started = time.monotonic()
         assert read_key(read_fd, poll_wait=0.5) == KeyEvent("none")
-        assert time.monotonic() - started < 1.0
+        assert time.monotonic() - started < 0.25  # dropped, not spun on
+        assert _pending(read_fd) is None  # nothing left to confuse the next key
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def _pending(fd: int) -> bytes | None:
+    from toknt.tui import keys
+
+    entry = keys._PENDING.get(fd)
+    return entry[0] if entry else None
+
+
+def test_a_stalled_sequence_does_not_eat_the_next_keystroke() -> None:
+    """A stalled ``ESC [`` is ambiguous; a key that cannot complete it wins.
+
+    The final byte of a real arrow is ``A``/``H``/…, but a letter like ``q``
+    cannot complete a sequence — decoding it as a keystroke keeps the quit
+    key working after a dropped sequence.
+    """
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"\x1b[")
+        assert read_key(read_fd, poll_wait=0.01) == KeyEvent("none")
+        assert _pending(read_fd) == b"\x1b["  # the prefix waits
+        os.write(write_fd, b"q")
+        assert read_key(read_fd, poll_wait=0.5) == KeyEvent("char", "q")
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_an_abandoned_prefix_expires() -> None:
+    """A sequence interrupted long ago must not shape the next key."""
+    from toknt.tui import keys
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"\x1b[")
+        assert read_key(read_fd, poll_wait=0.01) == KeyEvent("none")
+        # pretend the prefix has been waiting for a very long time
+        keys._PENDING[read_fd] = (b"\x1b[", time.monotonic() - 60.0)
+        os.write(write_fd, b"q")
+        assert read_key(read_fd, poll_wait=0.5) == KeyEvent("char", "q")
     finally:
         os.close(read_fd)
         os.close(write_fd)
