@@ -192,7 +192,8 @@ class App:
                 return True
             if char == "p":
                 if self.state.view != 1:  # only the models chart has rates
-                    return False
+                    self.state.status = "tok/s applies to the models view"
+                    return True  # repaint so the status shows
                 self.state.rate_mode = not self.state.rate_mode
                 return True
             if char == "m":

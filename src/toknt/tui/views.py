@@ -188,6 +188,15 @@ def title_row(
     if state.scanning:
         note = "‣ scanning…"
         painter.text(0, max(left + width - len(note) - 1, x), note, widgets.MUTED)
+    elif state.status:
+        # a one-line note at the page's right edge: scan results, the
+        # selftest, off-view key feedback. Clipped to the room the chips
+        # left, with an ellipsis when it does not fit — never allowed to
+        # reach back into the chips.
+        room = max(left + width - x - 3, 0)
+        if room >= 4:
+            note = state.status if len(state.status) <= room else state.status[: room - 1] + "…"
+            painter.text(0, left + width - len(note) - 1, note, widgets.MUTED)
     paint_hints(painter, rows - 1, columns)
 
 
@@ -1040,6 +1049,7 @@ def paint_models(
     chart_bottom = 3 + plot_rows + 2 + (1 if rows >= 24 else 0)
     table_width = main_width if rail_width else page_width
     include_share = False
+    include_rate = False
     share_width = 0
     if columns >= 78:
         # full breakdown: model, tokens, events, sessions, cost (+ a
@@ -1081,7 +1091,6 @@ def paint_models(
     peak_tokens = max(
         (entry.summary.total or 0 for entry in breakdown[:24]), default=0
     )
-    include_rate = ">≈tok/s" in {spec[0] for spec in columns_spec}
     table_rows: list[list[str]] = []
     for entry in breakdown[:24]:
         summary = entry.summary

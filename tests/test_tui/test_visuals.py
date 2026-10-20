@@ -21,7 +21,7 @@ from toknt.tui.app import App
 from toknt.tui.keys import KeyEvent
 from toknt.tui.painter import Painter
 from toknt.tui.style import heat_ramp
-from toknt.tui.views import TerminalContext
+from toknt.tui.views import AppState, TerminalContext, title_row
 
 
 def _screen(app: App, rows: int, cols: int) -> dict[int, str]:
@@ -49,6 +49,47 @@ def _screen(app: App, rows: int, cols: int) -> dict[int, str]:
         cursor[1] += 1
         i += 1
     return {row: "".join(cells).rstrip() for row, cells in screen.items()}
+
+
+class TestTitleStatus:
+    """The title bar's right edge: a one-line note, never over the chips."""
+
+    def _line(self, columns: int = 120, **state_kwargs) -> str:
+        painter = Painter()
+        painter.resize(14, columns)
+        state = AppState(**state_kwargs)
+        title_row(painter, state, rows=14, columns=columns)
+        return "".join(cell.char for cell in painter.buffer[0])
+
+    def test_status_renders_right_aligned(self) -> None:
+        line = self._line(columns=200, status="scan done: 5 new events")
+        assert line.rstrip().endswith("scan done: 5 new events")
+
+    def test_scanning_note_wins_over_status(self) -> None:
+        line = self._line(status="scan done: 5", scanning=True)
+        assert "‣ scanning…" in line
+        assert "scan done" not in line
+
+    def test_status_too_long_is_clipped_with_an_ellipsis(self) -> None:
+        line = self._line(columns=120, status="scan done: 5 new events")
+        assert "scan done" in line
+        assert line.rstrip().endswith("…")
+
+    def test_long_status_never_collides_with_chips(self) -> None:
+        line = self._line(status="x" * 300)
+        assert "x" in line
+        # the chips must survive intact: the note never reaches back into them
+        assert "harnesses: all" in line
+        assert "90d" in line
+
+    def test_status_stays_inside_the_page_frame(self) -> None:
+        line = self._line(columns=120, status="y" * 40)
+        page_left = 2
+        page_right = 118
+        first = line.index("y")
+        last = len(line.rstrip()) - 1
+        assert page_left <= first
+        assert last <= page_right
 
 
 class TestMonthLabels:

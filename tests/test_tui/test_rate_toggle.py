@@ -99,11 +99,12 @@ class TestRateToggleState:
         assert app.apply_key(KeyEvent("char", "p")) is True
         assert app.state.rate_mode is False
 
-    def test_other_views_do_not_react_to_p(self, data_dir, seeded_conn) -> None:
+    def test_other_views_get_feedback_not_a_toggle(self, data_dir, seeded_conn) -> None:
         app, _writes = _app()
         app.apply_key(KeyEvent("char", "1"))  # contributions
-        assert app.apply_key(KeyEvent("char", "p")) is False
+        assert app.apply_key(KeyEvent("char", "p")) is True  # repaint: status shows
         assert app.state.rate_mode is False
+        assert "models" in app.state.status
 
 
 class TestRateScreen:

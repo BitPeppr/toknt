@@ -140,10 +140,12 @@ messages that report neither output nor reasoning, so those events hand
 their predecessor's gap to whoever follows. Events without session
 attribution have no conversation to pair within and drop out of every rate.
 In the weighting, a slow message biases its day more than a fast burst,
-which matches what the wall clock actually spent. Expect ±10–25% accuracy on
-tool-free generation bursts and a systematic under-count on turns dominated
-by long tool runs — treat the comparisons between models and the trends over
-time as the meaningful part, not any single number as gospel. In interactive mode
+which matches what the wall clock actually spent. Accuracy depends on the
+work: tool-free bursts land closest to a model's true output speed, while
+turns dominated by long tool runs bias the rate down, because the wall
+clock between messages includes the tools. toknt has no way to measure a
+true duration, so treat the comparisons between models and the trends over
+time as the signal — never a single number as gospel. In interactive mode
 the estimate lives behind `p` on the models view (chart) and the table's
 `≈tok/s` column; on the command line it is `toknt models --tps`.
 
