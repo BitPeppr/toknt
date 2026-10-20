@@ -99,7 +99,7 @@ class TestContributionsTiers:
         joined = "\n".join(s.values())
         # the full wrapped legend cannot fit; the summary must
         assert "opencode" in joined
-        assert "(o/x/a/h)" in joined
+        assert "(h)" in joined
         # nothing collides with the hint row
         assert "contributions — tokens per day" in joined
 

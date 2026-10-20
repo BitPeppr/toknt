@@ -478,7 +478,7 @@ def models(
     tps: bool = typer.Option(
         False,
         "--tps",
-        help="Add a ≈tok/s column (mean generation rate, estimated from message gaps).",
+        help="Add a tok/s column (mean generation rate, derived from message gaps).",
     ),
 ) -> None:
     """Model inventory with per-model usage and costs."""
@@ -523,10 +523,9 @@ def models(
     table.add_column("reported cost", justify="right")
     table.add_column("est. cost", justify="right")
     if tps:
-        # ≈ marks the estimate: a message's completion timestamp is
-        # recorded, its duration is not — the rate pairs each message
-        # with its predecessor's gap
-        table.add_column("≈ tok/s", justify="right")
+        # a message's completion timestamp is recorded, its duration is
+        # not — the rate pairs each message with its predecessor's gap
+        table.add_column("tok/s", justify="right")
     for row in breakdown:
         info = inventory.get(row.key, {})
         est = estimates.get(row.key)

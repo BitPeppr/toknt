@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from toknt.analytics import aggregation
 from toknt.tui.painter import BOLD, Painter
-from toknt.tui.style import heat_ramp
+from toknt.tui.style import SERIES_HEX, heat_ramp
 from toknt.tui.widgets import (
     compact_number,
     draw_braille_lines,
@@ -142,7 +142,7 @@ def test_braille_lines_paint_colored_subpixels() -> None:
     )
     braille = [cell for line in painter.buffer for cell in line if "⠀" <= cell.char <= "⣿"]
     assert braille
-    assert {cell.fg for cell in braille} == {0x56B4E9, 0xE69F00}  # both series
+    assert {cell.fg for cell in braille} == {SERIES_HEX[0], SERIES_HEX[1]}  # both series
     assert painter.frame() != b""
 
 

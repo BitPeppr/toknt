@@ -163,7 +163,7 @@ class TestModelsCommand:
     ) -> None:
         result = invoke("models", *PERIOD, "--no-chart")
         assert result.exit_code == 0
-        assert "≈ tok/s" not in result.stdout
+        assert "tok/s" not in result.stdout
 
     def test_tps_column_shows_estimated_rates(
         self, data_dir: Path, seeded_conn: sqlite3.Connection
@@ -197,7 +197,7 @@ class TestModelsCommand:
         )
         result = invoke("models", *PERIOD, "--no-chart", "--tps")
         assert result.exit_code == 0
-        assert "≈ tok/s" in result.stdout
+        assert "tok/s" in result.stdout
         assert "12.0" in result.stdout  # 120 generated tokens / 10 s
 
     def test_tps_with_merge_models_joins_the_rate(

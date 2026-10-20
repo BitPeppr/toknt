@@ -16,6 +16,7 @@ import pytest
 
 from tests.support.models import at, usage
 from toknt.config import AppConfig
+from toknt.models.usage import TokenScheme
 from toknt.presentation import graphics
 from toknt.storage import ingestion
 from toknt.tui import widgets
@@ -105,10 +106,12 @@ class TestTitleStatus:
 
 
 class TestModelRailAlignment:
-    """The cache list and the model table end on the same row.
+    """The cache bars mirror the model table row for row.
 
-    Two blocks of different lengths in the same column look accidental;
-    ending together makes the page read as one frame.
+    The rail sits beside the table, so each bar must describe the model next
+    to it: same models, same order, same first and last row. A list that is
+    merely the same length but ranked differently would look aligned while
+    saying something else.
     """
 
     def _lines(self, rows: int = 30, cols: int = 160) -> list[str]:
@@ -122,12 +125,35 @@ class TestModelRailAlignment:
         screen = _screen(app, rows, cols)
         return [line for _row, line in sorted(screen.items())]
 
+    @staticmethod
+    def _rows(lines: list[str]) -> tuple[int, int, list[int], list[int]]:
+        heading = next(
+            index for index, line in enumerate(lines) if "cache hit rate" in line
+        )
+        rail_col = lines[heading].index("cache hit rate")
+        header = next(
+            index
+            for index, line in enumerate(lines)
+            if "events" in line[:rail_col] and "model" in line[:rail_col]
+        )
+        body = [
+            index
+            for index, line in enumerate(lines)
+            if index > header and "q quit" not in line and line[:rail_col].strip()
+        ]
+        cache = [
+            index
+            for index, line in enumerate(lines)
+            if index > header and "q quit" not in line and line[rail_col:].strip()
+        ]
+        return rail_col, header, body, cache
+
     @pytest.mark.parametrize("rows", [24, 30, 40])
-    def test_cache_list_ends_with_the_model_table(
+    def test_cache_rows_mirror_the_model_rows(
         self, rows: int, data_dir, seeded_conn
     ) -> None:
-        # a corpus with more cache rows than the table can show: the list
-        # must stop where the table stops, not run past it
+        # a corpus with more cache rows than the table can show: the bars
+        # must stop with the table, not run past it
         ingestion.upsert_usage_events(
             seeded_conn,
             [
@@ -145,23 +171,123 @@ class TestModelRailAlignment:
             ],
         )
         lines = self._lines(rows=rows)
-        heading = next(index for index, line in enumerate(lines) if "cache hit rate" in line)
-        rail_col = lines[heading].index("cache hit rate")
-        header = next(
-            index for index, line in enumerate(lines) if "tokens" in line and "events" in line
+        rail_col, header, body, cache = self._rows(lines)
+        heading = next(
+            index for index, line in enumerate(lines) if "cache hit rate" in line
         )
-        body = [
-            index
-            for index, line in enumerate(lines)
-            if index > header and "q quit" not in line and line[:rail_col].strip()
+        # the cache heading shares the table's header row, so the bars and
+        # the model rows line up exactly
+        assert heading == header
+        assert body
+        assert body == cache
+        assert len(body) <= 24
+        for index in body:
+            model = lines[index][:rail_col].split()[0]
+            label = lines[index][rail_col:].split()[0]
+            assert model.startswith(label), (model, label, lines[index])
+
+    def test_model_without_cache_reporting_gets_a_dash_in_its_row(
+        self, data_dir, seeded_conn
+    ) -> None:
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id="usage:opencode:cache-known",
+                    ts_ms=at(2026, 10, 2, 9),
+                    model="known-cache-model",
+                    input=100,
+                    output=50,
+                    cache_read=100,
+                    cache_write=0,
+                ),
+                usage(
+                    id="usage:opencode:cache-unknown",
+                    ts_ms=at(2026, 10, 2, 9, 1),
+                    model="unknown-cache-model",
+                    scheme=TokenScheme.UNKNOWN,
+                    input=100,
+                    output=10,
+                    cache_read=0,
+                    cache_write=0,
+                ),
+            ],
+        )
+        lines = self._lines(rows=30)
+        rail_col, _header, _body, _cache = self._rows(lines)
+        unknown_row = next(
+            line for line in lines if line[rail_col:].startswith("unknown-cach")
+        )
+        # no cache-reporting scheme → no invented percentage
+        assert "—" in unknown_row[rail_col:]
+        known_row = next(
+            line for line in lines if line[rail_col:].startswith("known-cache-")
+        )
+        assert "50%" in known_row[rail_col:]
+
+
+class TestSessionsBottomMargin:
+    def test_tall_terminal_keeps_a_bottom_margin_and_scrolls(
+        self, data_dir, seeded_conn
+    ) -> None:
+        base = at(2026, 10, 10, 9, 0)
+        ingestion.upsert_usage_events(
+            seeded_conn,
+            [
+                usage(
+                    id=f"usage:opencode:many-{index:02d}",
+                    ts_ms=base + index * 60_000,
+                    session_id=f"ses_many_{index:02d}",
+                    project=f"/work/session-{index:02d}",
+                    model="model-a",
+                )
+                for index in range(30)
+            ],
+        )
+        writes: list[bytes] = []
+        app = App(AppConfig(), stdin_fd=0, stdout_fd=1)
+        app.term = SimpleNamespace(write=writes.append, writes=writes)
+        app.ctx = TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark")
+        app.painter.resize(40, 120)
+        app.state.view = 3
+        app.paint()
+        screen = _screen(app, 40, 120)
+        time_re = re.compile(r"\d{2} [A-Z][a-z]{2} \d{2}:\d{2}")
+        rows = [row for row, line in screen.items() if time_re.search(line)]
+        assert len(rows) == 24  # capped like the models table
+        assert max(rows) <= 32  # a real bottom margin above the notes/hints
+        # the 24-row window must not cap the cursor: scrolling still walks
+        # the whole ranked list
+        for _ in range(29):
+            assert app.apply_key(KeyEvent("down"))
+        assert app.state.session_row == 29
+        app.paint()
+        screen = _screen(app, 40, 120)
+        first = min(row for row, line in screen.items() if time_re.search(line))
+        assert "session-29" not in screen[first]  # newest row has scrolled off
+
+
+class TestToolsOutcomes:
+    def test_pending_calls_are_counted_in_the_unknown_column(
+        self, data_dir, seeded_conn
+    ) -> None:
+        # the fixture's 'exec' call is pending: it has no rate, but it must
+        # still appear in an outcome column so calls always add up
+        app = App(AppConfig(), stdin_fd=0, stdout_fd=1)
+        app.term = SimpleNamespace(write=lambda _data: None, writes=[])
+        app.ctx = TerminalContext(backend="off", cell_w=10, cell_h=20, theme="dark")
+        app.painter.resize(20, 160)
+        app.state.view = 2
+        app.paint()
+        lines = [
+            "".join(cell.char for cell in app.painter.buffer[row]).rstrip()
+            for row in range(app.painter.rows)
         ]
-        cache = [
-            index
-            for index, line in enumerate(lines)
-            if index > heading and "q quit" not in line and line[rail_col:].strip()
-        ]
-        assert body and cache
-        assert max(cache) == max(body)
+        row = next(line for line in lines if line.strip().startswith("exec "))
+        assert re.search(
+            r"exec\s+shell\s+1\s+0\s+0\s+0\s+0\s+1\s+—", row
+        ), row
+        app.conn.close()
 
 
 class TestMonthLabels:
@@ -276,6 +402,9 @@ class TestCacheRates:
         assert rates["m0"].rate == pytest.approx(0.75)
         assert rates["m1"].rate == pytest.approx(0.25)
         assert rates["m2"].rate is None  # unknown scheme never invents a rate
+        # the canonical key is what the table rows join on; the label is not
+        assert rates["m0"].identity == "m0"
+        assert rates["m2"].identity == "m2"
 
 
 class TestHarnessFocus:

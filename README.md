@@ -83,10 +83,9 @@ bottom bar pairs each key with a dim action label.
 | `1`–`4`                    | contributions · tokens by model · tools · sessions                  |
 | `t`                        | cycle window: `3h → 5h → 1d → 3d → 7d → 30d → 90d → 1y → all`    |
 | `v`                        | cycle metric: total · input · output · reasoning · cached           |
-| `p`                        | models view: chart unit tokens ⇄ ≈ tokens/s (estimated)             |
+| `p`                        | models view: chart unit tokens ⇄ tok/s (derived from message gaps)  |
 | `m`                        | merge the same model served by different providers (one row each)   |
 | `h`                        | isolate one harness at a time: all → each (that has data) → all   |
-| `o` / `x` / `a`            | toggle OpenCode / Codex / Claude Code in every view                 |
 | `←` `→` `↑` `↓`            | move the day cursor (contributions) or table selection              |
 | `r`                        | rescan all sources in the background, then show fresh data          |
 | `?`                        | key reference overlay (the chart underneath stays put)              |
@@ -109,29 +108,30 @@ shows the days it covers inside the current week.
 The models view renders a chart of the current metric split by the top 8
 models beside a right rail that holds a **donut of the models' token share**
 (on image backends; a colored share ribbon elsewhere), the model's legend
-chips, and **cache hit-rate bars per model** (scheme-aware: cache reads are
-a separate denominator for anthropic-style sources, a subset for openai-style
-ones, and absent entirely for unknown schemes). Below, the per-model
-breakdown table fills the zone width and ends with a `vs max` bar showing
-each model's size relative to the busiest one, and — when the table zone
-can afford it (about 110 columns or wider) — an `≈tok/s` column with each
+chips, and **cache hit-rate bars that mirror the per-model table** (one bar
+per visible row, in the table's order; scheme-aware: cache reads are a
+separate denominator for anthropic-style sources, a subset for openai-style
+ones, and absent entirely for unknown schemes, shown as `—`). Below, the
+per-model breakdown table fills the zone width and ends with a `vs max` bar
+showing each model's size relative to the busiest one, and — when the table
+zone can afford it (about 110 columns or wider) — a `tok/s` column with each
 model's mean generation rate. The selected **metric** drives all of it —
 the chart, the donut's shares, the table's numbers and the ranking — so
 switching to `input` re-ranks the table by input tokens and reports input
 tokens in every column. Pressing **`p`** trades the chart's unit: instead
-of tokens per bucket it draws the ≈ tokens/s estimate per bucket, keeping
+of tokens per bucket it draws the derived tok/s rate per bucket, keeping
 the same models in the same order (only the lines move, never the colours).
 Piping or scripting (non-tty stdout) gets the old static print; `toknt
 overview` forces that dashboard, and `TOKNT_TUI=0` disables the
 interactive boot entirely.
 
-### Where ≈ tok/s comes from (and how accurate it is)
+### Where tok/s comes from (and how accurate it is)
 
 The harnesses record when each assistant message finished, never how long it
 took, so a rate cannot be read off a single event. toknt instead pairs every
-message with its predecessor in the same session and estimates
+message with its predecessor in the same session and derives
 
-    rate ≈ Σ (generated tokens) / Σ (gap to the previous message)
+    tok/s = Σ (generated tokens) / Σ (gap to the previous message)
 
 Generated tokens follow the source's own reporting scheme, because the
 categories mean different things: an Anthropic-style source reports
@@ -151,7 +151,7 @@ the wall clock between messages includes the tools. toknt has no way to
 measure a true duration, so treat the comparisons between models and the
 trends over time as the signal — never a single number as gospel. In
 interactive mode the estimate lives behind `p` on the models view (chart)
-and the table's `≈tok/s` column; on the command line it is
+and the table's `tok/s` column; on the command line it is
 `toknt models --tps`.
 
 ### Merging models across providers
@@ -415,8 +415,8 @@ Quality codes: `unparsable_row`, `unreadable_file`, `missing_usage`,
 `error`, doctor suggests `toknt scan --full` to rebuild it from scratch.
 
 Tool success rates use only calls with a known final outcome; `pending` and
-`unknown` calls are excluded from the denominator and shown separately, so a
-success rate can never flatter the data.
+`unknown` calls are excluded from the denominator and stay visible in the
+outcome columns, so a success rate can never flatter the data.
 
 ## Privacy
 

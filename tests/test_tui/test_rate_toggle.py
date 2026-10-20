@@ -1,4 +1,4 @@
-"""The 'p' toggle: the models chart switches tokens ⇄ ≈ tokens/s."""
+"""The 'p' toggle: the models chart switches tokens ⇄ tokens per second."""
 
 from __future__ import annotations
 
@@ -158,8 +158,16 @@ class TestRateToggleState:
             app.apply_key(KeyEvent("ctrl+c"))
 
 
+def _table_header(joined: str) -> str:
+    return next(
+        line
+        for line in joined.splitlines()
+        if "model" in line and "events" in line
+    )
+
+
 class TestRateScreen:
-    """136 columns: the table zone is wide enough for the ≈tok/s column."""
+    """136 columns: the table zone is wide enough for the tok/s column."""
 
     def test_heading_switches_with_the_toggle(self, data_dir, seeded_conn) -> None:
         _rate_pair(seeded_conn)
@@ -167,11 +175,12 @@ class TestRateScreen:
         app.apply_key(KeyEvent("char", "2"))
         app.paint()
         assert "tokens by model" in _joined(app, writes)
-        assert "≈ tokens/s" not in _joined(app, writes)
+        assert "tokens per second" not in _joined(app, writes)
         app.apply_key(KeyEvent("char", "p"))
         app.paint()
         joined = _joined(app, writes)
-        assert "≈ tokens/s by model" in joined
+        assert "tokens per second by model" in joined
+        assert "output+reasoning" not in joined
         assert "tokens by model" not in joined
 
     def test_table_carries_the_estimated_rate_column(
@@ -182,7 +191,7 @@ class TestRateScreen:
         app.apply_key(KeyEvent("char", "2"))
         app.paint()
         joined = _joined(app, writes)
-        assert "≈tok/s" in joined  # visible before the toggle too
+        assert "tok/s" in _table_header(joined)  # visible before the toggle too
         assert "12.0" in joined  # 120 generated tokens / 10 s
 
     def test_no_pairs_means_no_rate_column_and_no_data(
@@ -194,12 +203,12 @@ class TestRateScreen:
         assert app.apply_key(KeyEvent("char", "p")) is True
         app.paint()
         joined = _joined(app, writes)
-        assert "≈ tokens/s by model" in joined
+        assert "tokens per second by model" in joined
         # the window is not empty — only the rate is unmeasurable, and the
         # message says so
         assert "no rate data" in joined
         assert "no data for this window" not in joined
-        assert "≈tok/s" not in joined
+        assert "tok/s" not in _table_header(joined)
 
     def test_help_card_mentions_p(self, data_dir, seeded_conn) -> None:
         app, writes = _app()
@@ -216,7 +225,11 @@ class TestRateScreen:
         app.apply_key(KeyEvent("char", "m"))
         app.paint()
         lines = _joined(app, writes).splitlines()
-        header = next(index for index, line in enumerate(lines) if "≈tok/s" in line)
+        header = next(
+            index
+            for index, line in enumerate(lines)
+            if "events" in line and "tok/s" in line
+        )
         row = next(
             line for line in lines[header + 1 :] if "muse-spark" in line and line.strip()
         )

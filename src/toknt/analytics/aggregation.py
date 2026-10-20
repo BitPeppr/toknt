@@ -528,9 +528,9 @@ def model_rate_totals(
 
     Keys use the same convention as ``usage_breakdown``'s model keys (the
     identity when ``canonical`` is given, the raw spelling otherwise) so a
-    table row can look its rate up directly. The estimate is labelled ≈
-    everywhere it is shown: the harnesses record when a message completed,
-    never how long it took.
+    table row can look its rate up directly. The rate is derived, not
+    provider-reported: the harnesses record when a message completed, never
+    how long it took.
     """
     per_key: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     rows = rows if rows is not None else fetch_usage_rows(conn, flt)
@@ -558,7 +558,7 @@ def generation_rate_series(
     lineup: Mapping[str, str] | None = None,
     rows: Sequence[UsageRow] | None = None,
 ) -> Series:
-    """Per-bucket mean generation tokens/s, split by model — ≈ estimate.
+    """Per-bucket mean generation tokens/s, split by model — derived rate.
 
     ``lineup`` is the display-name -> identity map of the token chart: the
     rate chart then plots exactly the same models, in the same order, so
@@ -998,9 +998,11 @@ class ModelCacheRate:
     openai-style stores report cached tokens as a subset of input
     (rate = cache_read / input). Models without a known scheme or without
     cache reporting get ``rate = None`` and never show a made-up number.
+    ``identity`` is the canonical join key; ``model`` is only the label.
     """
 
     model: str
+    identity: str
     cache_read: int
     prompt: int
     events: int
@@ -1071,6 +1073,7 @@ def model_cache_rates(
         rates.append(
             ModelCacheRate(
                 model=_display_key(key, spellings),
+                identity=key,
                 cache_read=cache_read if known else 0,
                 prompt=prompt if known else 0,  # no rate without a known scheme
                 events=events,

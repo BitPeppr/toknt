@@ -193,7 +193,7 @@ class Analysis:
         merge: bool = False,
         lineup: Mapping[str, str] | None = None,
     ) -> aggregation.Series:
-        """≈ tokens/s per model per bucket (see aggregation for the method).
+        """Derived tokens/s per model per bucket (see aggregation for the method).
 
         ``lineup`` is the token chart's display-name -> identity map: the
         rate chart then plots the same models in the same order, so the

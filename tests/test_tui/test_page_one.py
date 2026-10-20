@@ -68,6 +68,17 @@ class TestCalendarLayout:
 
 
 class TestShareLists:
+    def test_oxa_keys_no_longer_toggle_harnesses(
+        self, data_dir, seeded_conn
+    ) -> None:
+        # 'h' is the only harness filter now; letters that used to toggle
+        # three hard-coded harnesses must be inert
+        app, _writes = _app()
+        before = app.state.agents
+        for key in "oxa":
+            assert app.apply_key(KeyEvent("char", key)) is False
+        assert app.state.agents == before
+
     def test_project_list_sits_above_the_harness_list(
         self, data_dir, seeded_conn
     ) -> None:

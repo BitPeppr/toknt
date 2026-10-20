@@ -34,6 +34,10 @@ METRICS = ("total", "input", "output", "reasoning", "cached")
 #: gutters around it, and a 16-character model name to sit beside.
 RATE_TABLE_WIDTH = 72
 
+#: Most rows a table paints even when the terminal is taller: a wall of rows
+#: is less readable than a list with breathing room below it.
+TABLE_ROW_CAP = 24
+
 #: Short column labels so a table can follow the selected metric.
 METRIC_COLUMN_LABELS = {
     "total": "tokens",
@@ -51,7 +55,6 @@ HINT_PAIRS = (
     ("?", "help"),
     ("p", "tok/s"),
     ("h", "isolate"),
-    ("o/x/a", "harness"),
     ("r", "rescan"),
     ("↑↓←→", "inspect"),
 )  # "q quit" is pinned to the right edge by paint_hints; pairs are ordered
@@ -776,7 +779,7 @@ def _paint_contribution_rail(
         if len(off) <= 3 and sum(len(name) for name in off) + 10 <= width:
             note = "· " + ", ".join(off) + " (off)"
         else:
-            note = f"· {len(off)} harnesses off (o/x/a)"
+            note = f"· {len(off)} harnesses off (h to cycle)"
         painter.text(cursor, col, note[: width - 2], widgets.MUTED)
 
 
@@ -959,7 +962,7 @@ def _paint_summary_line(
     remaining = len(with_data) - shown
     note = f"+{remaining} more" if remaining > 0 else "no other data"
     if x < columns - 2:
-        painter.text(row, x, f"\u00b7 {note} (o/x/a/h)"[: columns - x - 1], widgets.MUTED)
+        painter.text(row, x, f"\u00b7 {note} (h)"[: columns - x - 1], widgets.MUTED)
 
 
 def _paint_share_strip(
@@ -1016,7 +1019,7 @@ def paint_models(
             merge=state.merge_models,
             lineup=token_series.identities,
         )
-        heading = "≈ tokens/s by model — output+reasoning over message gaps"
+        heading = "tokens per second by model"
     else:
         series = token_series
         heading = f"tokens by model — {aggregation.metric_label(metric)}"
@@ -1077,23 +1080,28 @@ def paint_models(
             ),
         )
     pie_image = None
-    # the table's extent decides how far the rail's cache list may run: the
-    # two blocks end on the same row, so the page reads as one frame
     chart_bottom = 3 + plot_rows + 2 + (1 if rows >= 24 else 0)
     table_max_rows = max(rows - 2 - chart_bottom, 0)
-    model_row_count = min(len(breakdown), 24, table_max_rows)
-    table_last_row = chart_bottom + model_row_count
+    model_row_count = min(len(breakdown), TABLE_ROW_CAP, table_max_rows)
+    # the cache bars mirror the table row for row (same models, same order):
+    # the rail sits beside the table, so each bar describes the model next
+    # to it and the two blocks always end together
+    cache_by_identity = {entry.identity: entry.rate for entry in cache_rates}
+    cache_rows = [
+        (entry.key, cache_by_identity.get(entry.identity))
+        for entry in breakdown[:model_row_count]
+    ]
     if rail_width:
         pie_image = _paint_model_side(
             painter,
             rail_col,
             rail_width,
             shares,
-            cache_rates,
+            cache_rows,
             row=3,
             rows=rows,
             ctx=ctx,
-            list_bottom=table_last_row,
+            list_top=chart_bottom,
             identity=(
                 state.window,
                 tuple(sorted(state.agents.active)),
@@ -1137,9 +1145,9 @@ def paint_models(
             (">cost", 8, 1),
         ]
         if include_rate:
-            # ≈ marks the estimate: a message's completion timestamp is
-            # recorded, its duration is not
-            columns_spec.append((">≈tok/s", 7, 1))
+            # derived from message gaps: a completion timestamp is recorded,
+            # the generation duration is not
+            columns_spec.append((">tok/s", 7, 1))
         columns_spec += [("vs max", share_width, 0)] if include_share else []
     else:
         # narrow: model, the metric, events (total ~54 columns)
@@ -1149,10 +1157,10 @@ def paint_models(
             (">events", 8, 1),
         ]
     peak_tokens = max(
-        (entry.summary.total or 0 for entry in breakdown[:24]), default=0
+        (entry.summary.total or 0 for entry in breakdown[:TABLE_ROW_CAP]), default=0
     )
     table_rows: list[list[str]] = []
-    for entry in breakdown[:24]:
+    for entry in breakdown[:TABLE_ROW_CAP]:
         summary = entry.summary
         cells = [
             entry.key[:30],
@@ -1197,111 +1205,116 @@ def _paint_model_side(
     col: int,
     width: int,
     shares: list[tuple[str, float]],
-    cache_rates: list[aggregation.ModelCacheRate],
+    cache_rows: list[tuple[str, float | None]],
     *,
     row: int,
     rows: int,
     ctx: TerminalContext,
     identity: tuple,
-    list_bottom: int | None = None,
+    list_top: int,
 ) -> ImageRequest | None:
-    """Right zone of the models view: donut, legend under it, cache bars.
+    """Right zone of the models view: donut, legend, cache bars.
 
-    The blocks stack vertically with hard row guards, so the legend never
-    lands on the donut and nothing spills into the hint bar; a breathing
-    row separates each block. Terminals without image support get a small
-    stacked-block share ribbon instead of the bitmap donut. ``list_bottom``
-    is the row the model table ends on: the cache list stops there, so the
-    two blocks finish together instead of running past each other.
+    The donut and its legend occupy the space above the model table; the
+    cache bars are pinned to the table (``list_top`` is its header row) and
+    mirror it model for model, so the two blocks start and end together.
+    Terminals without image support get a small stacked-block share ribbon
+    instead of the bitmap donut. The freed rows above the table become
+    breathing space rather than a bigger donut.
     """
     bottom = rows - 2
+    # one quiet row between the rail's upper blocks and the cache heading
+    rail_bottom = min(bottom, list_top - 2)
     pie_image: ImageRequest | None = None
-    cursor = row
-    pie_rows = max(8, min(13, rows // 3))
-    if ctx.backend in ("kitty", "iterm2", "sixel") and pie_rows >= 6 and rows >= 16:
-        from toknt.presentation import graphics
-
-        square_px = min((width - 1) * ctx.cell_w, pie_rows * ctx.cell_h)
-        pie_cols = max(square_px // max(ctx.cell_w, 1), 6)
-        pie_image_rows = max(square_px // max(ctx.cell_h, 1), 1)
-        png, rgba = graphics.pie_png(
-            width=square_px, height=square_px, weights=[value for _key, value in shares]
-        )
-        # left-aligned with the legend chips and cache bars below it:
-        # a donut floating in the middle of the rail looks detached
-        donut_col = col
-        pie_image = ImageRequest(
-            row=row,
-            col=donut_col,
-            columns=pie_cols,
-            rows=pie_image_rows,
-            payload=graphics_encode(
-                ctx.backend, png, rgba, square_px, square_px,
-                columns=pie_cols, rows=pie_image_rows, image_id=2,
-            ),
-            image_id=2,
-            key=(
-                f"pie/{square_px}/"
-                f"{abs(hash(identity + tuple(round(value) for _key, value in shares))):#x}"
-            ),
-        )
-        cursor = row + pie_image_rows + 1  # one breathing row under the donut
-    elif shares and rows >= 14:
-        # no image transport: a colored stacked ribbon still shows the mix
-        total_shares = sum(value for _key, value in shares) or 1.0
-        ribbon_width = max(width - 2, 8)
-        for ribbon_row in range(row, min(row + 3, bottom + 1)):
-            x = col
-            for index, (_key, value) in enumerate(shares):
-                segment = max(round(value / total_shares * ribbon_width), 1)
-                color = Attr(SERIES_HEX[index % len(SERIES_HEX)], None, 0)
-                painter.text(
-                    ribbon_row, x, "█" * min(segment, ribbon_width - (x - col)), color
-                )
-                x += segment
-                if x - col >= ribbon_width:
-                    break
-        cursor = row + 3
-    # legend below the donut: chips are 15 columns wide (swatch + 12-char
-    # name) so a 28–42-column zone fits two per row
+    # chips are 15 columns wide (swatch + 12-char name): a 28–42-column
+    # zone fits one or two per row
     chip_width = 15
     per_row = max(width // chip_width, 1)
-    legend_lines = 0
-    for index, (key, _value) in enumerate(shares):
-        slot = index % per_row
-        line = index // per_row
-        paint_row = cursor + line
-        if paint_row > bottom:
-            break
-        widgets.agent_swatch(
-            painter, paint_row, col + slot * chip_width, index, key[:12]
-        )
-        legend_lines = max(legend_lines, line + 1)
-    cursor += legend_lines + 1  # blank before the cache block
-    # cache-rate bars below the legend block
-    if cursor <= bottom and cache_rates:
-        limit = bottom if list_bottom is None else min(bottom, list_bottom)
-        # the bars sit at cursor+1 .. cursor+budget, so a budget of
-        # limit - cursor puts the last one exactly on `limit`
-        budget = max(limit - cursor, 0)
-        if budget > 0:
-            painter.text(cursor, col, "cache hit rate", TITLE_ATTR)
-            shown = 0
-            for entry in cache_rates:
-                if entry.rate is None or shown >= budget:
-                    continue
-                label = f"{entry.model[:12]:12}"
-                bar = widgets.bar_glyphs(entry.rate, 8)
-                painter.text(cursor + 1 + shown, col, label, widgets.MUTED)
-                painter.text(
-                    cursor + 1 + shown,
-                    col + 13,
-                    f"{bar}{entry.rate * 100:>4.0f}%",
-                    DEFAULT_ATTRS,
-                )
-                shown += 1
-            if shown == 0:
-                painter.text(cursor + 1, col, "no cache data in window", widgets.MUTED)
+    wanted_legend = (len(shares) + per_row - 1) // per_row if shares else 0
+    if shares and rail_bottom >= row:
+        use_image = ctx.backend in ("kitty", "iterm2", "sixel") and rows >= 16
+        if use_image:
+            from toknt.presentation import graphics
+
+            room = max(rail_bottom - row + 1, 0)
+            # keep a blank row under the donut and at least six image rows
+            legend_lines = min(wanted_legend, max(room - 1 - 6, 0))
+            pie_rows = max(6, min(13, rows // 3, room - legend_lines - 1))
+            square_px = min((width - 1) * ctx.cell_w, pie_rows * ctx.cell_h)
+            pie_cols = max(square_px // max(ctx.cell_w, 1), 6)
+            pie_image_rows = max(square_px // max(ctx.cell_h, 1), 1)
+            png, rgba = graphics.pie_png(
+                width=square_px,
+                height=square_px,
+                weights=[value for _key, value in shares],
+            )
+            # left-aligned with the legend chips and cache bars below it:
+            # a donut floating in the middle of the rail looks detached
+            pie_image = ImageRequest(
+                row=row,
+                col=col,
+                columns=pie_cols,
+                rows=pie_image_rows,
+                payload=graphics_encode(
+                    ctx.backend, png, rgba, square_px, square_px,
+                    columns=pie_cols, rows=pie_image_rows, image_id=2,
+                ),
+                image_id=2,
+                key=(
+                    f"pie/{square_px}/"
+                    f"{abs(hash(identity + tuple(round(value) for _key, value in shares))):#x}"
+                ),
+            )
+            cursor = row + pie_image_rows + 1  # one breathing row under the donut
+        else:
+            # no image transport: a colored stacked ribbon still shows the mix
+            total_shares = sum(value for _key, value in shares) or 1.0
+            ribbon_width = max(width - 2, 8)
+            ribbon_rows = min(3, max(rail_bottom - row + 1, 0))
+            for ribbon_row in range(row, row + ribbon_rows):
+                x = col
+                for index, (_key, value) in enumerate(shares):
+                    segment = max(round(value / total_shares * ribbon_width), 1)
+                    color = Attr(SERIES_HEX[index % len(SERIES_HEX)], None, 0)
+                    painter.text(
+                        ribbon_row, x,
+                        "█" * min(segment, ribbon_width - (x - col)),
+                        color,
+                    )
+                    x += segment
+                    if x - col >= ribbon_width:
+                        break
+            cursor = row + ribbon_rows
+            legend_lines = min(wanted_legend, max(rail_bottom - cursor + 1, 0))
+        for index in range(min(len(shares), legend_lines * per_row)):
+            key, _value = shares[index]
+            slot = index % per_row
+            line = index // per_row
+            paint_row = cursor + line
+            if paint_row > rail_bottom:
+                break
+            widgets.agent_swatch(
+                painter, paint_row, col + slot * chip_width, index, key[:12]
+            )
+    # cache-rate bars: one row per table row, in the table's order
+    if cache_rows and list_top <= bottom:
+        painter.text(list_top, col, "cache hit rate", TITLE_ATTR)
+        for index, (label, rate) in enumerate(cache_rows):
+            paint_row = list_top + 1 + index
+            if paint_row > bottom:
+                break
+            painter.text(paint_row, col, f"{label[:12]:12}", widgets.MUTED)
+            if rate is None:
+                # no cache-reporting scheme in this window: never invent one
+                painter.text(paint_row, col + 13, "—", widgets.MUTED)
+                continue
+            bar = widgets.bar_glyphs(rate, 8)
+            painter.text(
+                paint_row,
+                col + 13,
+                f"{bar}{rate * 100:>4.0f}%",
+                DEFAULT_ATTRS,
+            )
     return pie_image
 
 
@@ -1318,7 +1331,7 @@ def paint_tools(
 ) -> ViewPaint:
     since_ms = since_for(state, now_ms)
     outcomes = analysis.tool_rows(since_ms, state.agents)
-    paint_heading(painter, columns, "tool outcomes (known-result calls only get rates)")
+    paint_heading(painter, columns, "tool outcomes — success rate from known outcomes")
     page_col, page_width = page_frame(columns)
     if page_width >= 112:
         tool_width = min(max(page_width - 100, 12), 40)
@@ -1364,7 +1377,9 @@ def paint_tools(
                     str(outcome.failure),
                     str(outcome.denied),
                     str(outcome.cancelled),
-                    str(outcome.unknown),
+                    # pending calls have no final result yet; keep them
+                    # visible so calls = the outcome columns on every row
+                    str(outcome.unknown + outcome.pending),
                     f"{rate * 100:.0f}%" if rate is not None else "—",
                     widgets.bar_glyphs(rate, bar_width - 2),
                 ]
@@ -1464,11 +1479,14 @@ def paint_sessions(
         if detailed:
             cells.extend([str(summary.events), str(entry.tool_calls)])
         body.append(cells)
-    offset = max(0, min(state.session_row, len(body) - (rows - 7)))
+    # cap the visible window like the models table: a wall of rows is not
+    # more useful than a readable list with a bottom margin
+    visible = min(TABLE_ROW_CAP, max(rows - 7, 1))
+    offset = max(0, min(state.session_row, len(body) - visible))
     widgets.draw_table(
         painter, 3, page_col, columns_spec, body,
         selected=state.session_row,
-        max_rows=rows - 7,
+        max_rows=visible,
         row_offset=offset,
     )
     selected = ranked[min(state.session_row, len(ranked) - 1)] if ranked else None
@@ -1490,11 +1508,10 @@ HELP_LINES = (
     "t       window: 3h/5h/1d/3d/7d/30d/90d/1y/all",
     "        (short windows auto-refresh)",
     "v       metric: total/input/output/reasoning/…",
-    "p       tok/s ⇄ tokens (models chart, ≈ estimated)",
+    "p       tok/s ⇄ tokens (models chart)",
     "m       merge models served by different providers",
     "        (glm-5.3-flash == z-ai/glm-5.3-flash)",
-    "o/x/a   toggle opencode · codex · claude_code",
-    "h       isolate one harness: all → each → all",
+    "h       isolate one harness: all → each with data → all",
     "arrows  inspect day / pick table row",
     "r       rescan sources in the background",
     "g       graphics self-test (draws a test image)",

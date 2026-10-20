@@ -170,7 +170,7 @@ class TestAgentLegend:
             frozenset({"opencode"}),
         )))
         assert "harnesses off" in text
-        assert "(o/x/a)" in text
+        assert "(h to cycle)" in text
 
     def test_few_toggled_off_agents_are_named(self, seeded_conn) -> None:
         active = frozenset(

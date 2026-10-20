@@ -381,7 +381,7 @@ class TestSessionRanking:
 
 
 class TestGenerationRate:
-    """≈ tokens/s comes from the gap between consecutive session messages.
+    """Tokens/s comes from the gap between consecutive session messages.
 
     The harnesses record when a message completed, never how long it took,
     so the rate is an estimate; these tests pin the estimator's defined

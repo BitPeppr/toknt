@@ -28,7 +28,6 @@ from toknt.tui.views import AppState, ImageRequest, TerminalContext
 DAY_MS = 86_400_000
 MIN_ROWS = 14
 MIN_COLS = 60
-AGENT_KEYS = {"o": "opencode", "x": "codex", "a": "claude_code"}
 
 #: Live (sub-day) windows rescan themselves in the background: quick first
 #: refresh after switching in, then steadily while the window is open.
@@ -210,10 +209,6 @@ class App:
                 return True
             if char == "m":
                 self.state.merge_models = not self.state.merge_models
-                return True
-            if char in AGENT_KEYS:
-                self.state.agents = self.state.agents.toggled(AGENT_KEYS[char])
-                self.state.cursor_day = None
                 return True
             if char == "h":
                 return self._cycle_harness_focus()
@@ -466,7 +461,18 @@ class App:
             )
             return count > 0
         if state.view == 3:
-            count = len(self.analysis.session_rows(self._since(), state.agents))
+            # the view paints up to 200 sessions through a 24-row window;
+            # clamp the cursor against that same list or scrolling stops
+            # after the first page
+            count = len(
+                self.analysis.session_rows(
+                    self._since(),
+                    state.agents,
+                    limit=200,
+                    merge=state.merge_models,
+                    metric=views.current_metric(state),
+                )
+            )
             state.session_row = _clamp(
                 state.session_row + (1 if name == "down" else -1), 0, max(count - 1, 0)
             )

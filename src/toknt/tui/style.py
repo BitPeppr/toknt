@@ -28,13 +28,17 @@ def mix(a: int, b: int, t: float) -> int:
     return (r << 16) | (g << 8) | c
 
 
+#: One muted, mid-tone character for every series: the old sky blue was
+#: the brightest entry and made page one's tab and share bar shout while
+#: the other pages stayed quiet. Hues still separate the series; the
+#: saturation and lightness stay in one narrow band.
 SERIES_HEX = (
-    0x56B4E9,  # sky
-    0xE69F00,  # orange
-    0x0072B2,  # blue
-    0x009E73,  # green
-    0xCC79A7,  # pink
-    0xD55E00,  # vermillion
+    0x4E8FA8,  # dusty blue
+    0xBC8A3C,  # ochre
+    0x3F6F8F,  # steel blue
+    0x4F8A72,  # sage
+    0xA9748C,  # mauve
+    0xB2633F,  # terracotta
     0x8C8C8C,  # grey
 )
 

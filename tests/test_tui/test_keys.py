@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from toknt.tui.keys import KeyEvent, decode, read_key
@@ -49,9 +51,53 @@ def test_escape_continuation_waits_for_fd() -> None:
     assert decode(b"\x1b").name == "esc"
 
 
-def test_read_key_none_on_quiet_fd() -> None:
-    import os
+def _pipe_with(payload: bytes) -> int:
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, payload)
+    os.close(write_fd)
+    return read_fd
 
+
+def test_split_arrow_sequence_is_completed_not_leaked() -> None:
+    """ESC + '[' in one read, 'A' in the next: still an up-arrow.
+
+    The final byte must never surface as a printable character: 'A' folds
+    to 'a' in the app, and a split sequence used to flash the harness chip
+    between 'all' and '21 of 22' while scrolling.
+    """
+    read_fd = _pipe_with(b"A")
+    try:
+        assert decode(b"\x1b[", fd=read_fd) == KeyEvent("up")
+    finally:
+        os.close(read_fd)
+
+
+def test_split_home_sequence_is_completed() -> None:
+    read_fd = _pipe_with(b"H")
+    try:
+        assert decode(b"\x1b[", fd=read_fd) == KeyEvent("home")
+    finally:
+        os.close(read_fd)
+
+
+def test_split_escape_after_bare_esc_is_completed() -> None:
+    read_fd = _pipe_with(b"[A")
+    try:
+        assert decode(b"\x1b", fd=read_fd) == KeyEvent("up")
+    finally:
+        os.close(read_fd)
+
+
+def test_incomplete_sequence_is_swallowed_not_typed() -> None:
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)  # EOF: no continuation is coming
+    try:
+        assert decode(b"\x1b[", fd=read_fd) == KeyEvent("none")
+    finally:
+        os.close(read_fd)
+
+
+def test_read_key_none_on_quiet_fd() -> None:
     rd, write_end = os.pipe()
     os.close(write_end)  # EOF: read() returns b"" and the decoder sees nothing
     try:
