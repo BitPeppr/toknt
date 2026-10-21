@@ -47,6 +47,8 @@ pip install toknt            # or into a virtualenv
 brew install bitpeppr/formulae/toknt   # macOS (Homebrew)
 ```
 
+`python -m toknt` runs the same command line interface.
+
 Then:
 
 ```bash
