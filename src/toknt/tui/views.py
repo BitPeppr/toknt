@@ -1580,7 +1580,7 @@ HELP_LINES = (
     "toknt interactive — keys",
     "",
     "1-4     contributions · models · tools · sessions",
-    "t       window: 3h/5h/1d/3d/7d/30d/90d/1y/all",
+    "t       window: 3d/1d/5h/3h/all/1y/90d/30d/7d",
     "        (short windows auto-refresh)",
     "v       metric: total/input/output/reasoning/…",
     "p       tok/s ⇄ tokens (tokens: log, rate: linear)",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -346,6 +347,25 @@ class TestQualityAndErrors:
 
 
 class TestIncrementalScans:
+    def test_an_unchanged_database_is_not_read_again(
+        self, conn: sqlite3.Connection, opencode_source: tuple
+    ) -> None:
+        """The message table has no index on time_updated.
+
+        Re-reading it costs a full table scan of a database that reaches
+        half a gigabyte, so a scan that finds the file unchanged stops
+        there — the file's size and mtime are the cheap signal.
+        """
+        source, db_path, _ = opencode_source
+        scan(conn, source)
+        second = scan(conn, source)
+        assert second.rows_seen == 0
+        assert any("no changes" in note for note in second.notes)
+        # the same bytes with a new timestamp are read again
+        os.utime(db_path, None)
+        third = scan(conn, source)
+        assert third.rows_seen > 0
+
     def test_rescan_is_idempotent(
         self, conn: sqlite3.Connection, opencode_source: tuple
     ) -> None:

@@ -56,8 +56,10 @@ WINDOWS: tuple[Window, ...] = (
 )
 
 #: The window the explorer opens on (resolved by label, not by index, so
-#: inserting a window never silently changes the default).
-DEFAULT_WINDOW = next(index for index, window in enumerate(WINDOWS) if window.label == "90d")
+#: inserting a window never silently changes the default). Three days is
+#: wide enough to show a working week and narrow enough that the charts
+#: still have something to say.
+DEFAULT_WINDOW = next(index for index, window in enumerate(WINDOWS) if window.label == "3d")
 
 #: Windows at most this many days long refresh themselves in the background
 #: (the "live" views: hour-bucketed charts, periodic rescan).

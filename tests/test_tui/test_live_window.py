@@ -7,6 +7,7 @@ auto-rescan so the numbers actually move while you watch.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from datetime import UTC, datetime
@@ -16,7 +17,7 @@ import pytest
 
 from toknt.config import AppConfig
 from toknt.tui import views
-from toknt.tui.app import LIVE_FIRST_SCAN_MS, LIVE_SCAN_INTERVAL_MS, App
+from toknt.tui.app import LIVE_FIRST_SCAN_MS, SCAN_INTERVAL_MS, App
 from toknt.tui.data import LIVE_WINDOW_DAYS, WINDOWS
 from toknt.tui.keys import KeyEvent
 from toknt.tui.views import TerminalContext
@@ -55,8 +56,21 @@ class TestWindows:
             "all",
         ]
 
-    def test_default_window_is_still_90d(self) -> None:
-        assert WINDOWS[views.AppState().window].label == "90d"
+    def test_default_window_is_three_days(self) -> None:
+        # three days is wide enough to show a working week and narrow
+        # enough that the charts still have something to say
+        assert WINDOWS[views.AppState().window].label == "3d"
+
+    def test_the_window_cycle_runs_backwards(self) -> None:
+        app, _writes = make_app()
+        app.state.window = index_of("3d")  # the window the explorer opens on
+        seen = []
+        for _ in range(5):
+            app.apply_key(KeyEvent("char", "t"))
+            seen.append(WINDOWS[app.state.window].label)
+        # from the default three days: a day, an afternoon, a morning, then
+        # on to everything
+        assert seen == ["1d", "5h", "3h", "all", "1y"]
 
     def test_since_for_3h_reaches_back_three_hours(self) -> None:
         state = views.AppState(window=index_of("3h"))
@@ -150,6 +164,17 @@ class TestHourBuckets:
 
 
 class TestAutoRescan:
+    @staticmethod
+    def _wait_for_scan(app: App) -> None:
+        """Drain the scan result the way the main loop does."""
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            app._drain_scan()
+            if not app.state.scanning:
+                return
+            time.sleep(0.05)
+        raise AssertionError("the scan never finished")
+
     def test_is_live_window_tracks_selection(self, data_dir) -> None:
         app, _writes = make_app()
         app.state.window = index_of("3h")
@@ -163,11 +188,12 @@ class TestAutoRescan:
         self, data_dir, seeded_conn
     ) -> None:
         app, _writes = make_app()
+        app.state.window = index_of("3d")
         before = time.time() * 1000
-        app.apply_key(KeyEvent("char", "t"))  # 90d → 1y
+        app.apply_key(KeyEvent("char", "t"))  # 3d → 1d
         assert app._next_auto_scan >= before + 1  # unchanged cadence
-        app.apply_key(KeyEvent("char", "t"))  # 1y → all
-        app.apply_key(KeyEvent("char", "t"))  # all → 3h
+        app.apply_key(KeyEvent("char", "t"))  # 1d → 5h
+        app.apply_key(KeyEvent("char", "t"))  # 5h → 3h
         assert app._is_live_window()
         assert app._next_auto_scan <= time.time() * 1000 + LIVE_FIRST_SCAN_MS + 50
 
@@ -175,7 +201,8 @@ class TestAutoRescan:
         self, data_dir, seeded_conn
     ) -> None:
         app, _writes = make_app()
-        for _ in range(4):  # 90d → 1y → all → 3h → 5h
+        app.state.window = index_of("3d")
+        for _ in range(2):  # 3d → 1d → 5h
             app.apply_key(KeyEvent("char", "t"))
         assert WINDOWS[app.state.window].label == "5h"
         assert app._is_live_window()
@@ -192,16 +219,53 @@ class TestAutoRescan:
         # a running scan is never stacked
         app._maybe_auto_scan()
         assert app.state.scanning is True
-        app._scan_thread.join(timeout=10)
+        self._wait_for_scan(app)
         # the worker drained its own connection; drain the done flag as the
         # main loop would and confirm the next tick moved into the future
         assert app._scan_done is True
         app._scan_done = False
         app._now_ms = int(time.time() * 1000)
-        app._next_auto_scan = app._now_ms + LIVE_SCAN_INTERVAL_MS
+        app._next_auto_scan = app._now_ms + SCAN_INTERVAL_MS
         assert app._next_auto_scan > time.time() * 1000
-        assert app.analysis._cache == {} or True  # invalidated by the worker
         assert app.state.scanning is False
+
+    def test_the_scan_runs_in_its_own_process(self, data_dir, seeded_conn) -> None:
+        # a scan parses every changed source file: doing that in a thread
+        # would stall the interface for exactly as long as it takes
+        app, _writes = make_app()
+        app._next_auto_scan = 0
+        app._maybe_auto_scan()
+        assert app._scan_process is not None
+        assert app._scan_process.pid != os.getpid()
+        self._wait_for_scan(app)
+        app._stop_scan()
+
+    def test_opening_the_app_starts_a_scan(
+        self, data_dir, seeded_conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # every launch reads the sources again: the last session may be
+        # hours old
+        app, _writes = make_app()
+        monkeypatch.setattr(app, "_probe_terminal", lambda: None)
+        monkeypatch.setattr(app, "_refresh_size", lambda force=False: False)
+        app._boot()
+        assert app.state.scanning is True
+        self._wait_for_scan(app)
+        app._stop_scan()
+
+    def test_every_window_refreshes_in_the_background(
+        self, data_dir, seeded_conn
+    ) -> None:
+        # the tick is not tied to the live windows any more: a changed
+        # source is picked up whatever the window shows
+        app, _writes = make_app()
+        app.state.window = index_of("30d")
+        assert app._is_live_window() is False
+        app._next_auto_scan = 0
+        app._maybe_auto_scan()
+        assert app.state.scanning is True
+        self._wait_for_scan(app)
+        app._stop_scan()
 
     def test_scan_completion_advances_the_clock_anchor(
         self, data_dir, seeded_conn
@@ -211,13 +275,12 @@ class TestAutoRescan:
         stale_anchor = app._now_ms
         app._next_auto_scan = 0
         app._maybe_auto_scan()
-        app._scan_thread.join(timeout=10)
+        self._wait_for_scan(app)
         # replicate the main loop's drain
         if app._scan_done:
             app._scan_done = False
             app._now_ms = int(time.time() * 1000)
-            if app._is_live_window():
-                app._next_auto_scan = app._now_ms + LIVE_SCAN_INTERVAL_MS
+            app._next_auto_scan = app._now_ms + SCAN_INTERVAL_MS
         assert app._now_ms >= stale_anchor
         assert app._next_auto_scan > stale_anchor
 
@@ -229,7 +292,7 @@ class TestAutoRescan:
         writes.clear()
         app._next_auto_scan = 0
         app._maybe_auto_scan()
-        app._scan_thread.join(timeout=10)
+        self._wait_for_scan(app)
         app._scan_done = False
         app._now_ms = int(time.time() * 1000)
         app.state.help = True  # force a full-screen change so the diff is large

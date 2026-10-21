@@ -40,7 +40,7 @@ def test_windows_labels() -> None:
 
 
 def test_default_window_is_resolved_by_label() -> None:
-    assert WINDOWS[DEFAULT_WINDOW].label == "90d"
+    assert WINDOWS[DEFAULT_WINDOW].label == "3d"
 
 
 def test_agent_toggles_toggle() -> None:

@@ -64,12 +64,26 @@ from toknt.storage.ingestion import (
 )
 
 #: Trailing window re-read on incremental scans (see module docstring).
-OVERLAP_MS = 7 * 24 * 3_600_000
+#: Measured on a live corpus of 30k assistant messages: the median delay
+#: between a message being written and being finalised is 9 s, the 90th
+#: percentile is 50 s, and only 4 messages in 30k were finalised more than
+#: an hour later (the longest was 100 minutes). Six hours therefore covers
+#: every late finalisation seen so far, while re-reading 1.4k rows instead
+#: of 18k — the difference between a scan that takes seconds and one that
+#: takes milliseconds.
+OVERLAP_MS = 6 * 3_600_000
 
 #: Each table gets its OWN checkpoint stream: sharing one key would let the
 #: legacy table's stale max(time_updated) overwrite the current table's
 #: watermark, silently shrinking every later incremental window.
 _MESSAGE_STREAM = "session_message"
+
+#: Checkpoint stream holding the *file state* of the source database (its
+#: size and modification time, plus its write-ahead log). It is the cheap
+#: "did anything change?" signal: the message table has no index on
+#: ``time_updated``, so even a trailing-window query costs a full table
+#: scan of a database with tens of thousands of JSON rows.
+_DB_FILE_STREAM = "dbfile"
 _LEGACY_STREAM = "message"
 _PART_STREAM = "part"
 
@@ -98,6 +112,25 @@ def _opt_str(value: object) -> str | None:
 
 def _as_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def _database_file_state(db_path: Path) -> str:
+    """A cheap fingerprint of the source database: size and mtime.
+
+    The database file and its write-ahead log are the only things that
+    change when opencode writes; stat'ing them costs microseconds, while
+    re-reading the message table costs seconds. The shared-memory index
+    (``-shm``) is deliberately left out: readers update it, and that would
+    report a change where there is none.
+    """
+    parts: list[str] = []
+    for path in (db_path, db_path.with_name(db_path.name + "-wal")):
+        try:
+            stat = path.stat()
+            parts.append(f"{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            parts.append("0:0")
+    return "|".join(parts)
 
 
 class OpenCodeAdapter(Adapter):
@@ -135,6 +168,22 @@ class OpenCodeAdapter(Adapter):
         self, conn: sqlite3.Connection, db_path: Path, *, full: bool
     ) -> ScanReport:
         mode = "full" if full else "incremental"
+        # The state is read *before* the scan and stored after it: a write
+        # that lands while we are reading changes the state, so the next
+        # scan notices and re-reads instead of trusting a half-read file.
+        file_state = _database_file_state(db_path)
+        if not full:
+            checkpoint = load_checkpoint(conn, self.source_id, _DB_FILE_STREAM)
+            if checkpoint is not None and checkpoint.fingerprint == file_state:
+                # Nothing on disk changed since the last scan: re-reading
+                # the message table would walk every row for no new data.
+                return ScanReport(
+                    source_id=self.source_id,
+                    mode=mode,
+                    status="ok",
+                    rows_seen=0,
+                    notes=("no changes since the last scan",),
+                )
         try:
             src = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
         except sqlite3.Error as exc:
@@ -152,7 +201,7 @@ class OpenCodeAdapter(Adapter):
                 # A full rescan re-observes everything: stale issues would
                 # otherwise survive fixed sources forever.
                 clear_quality_issues(conn, source_id=self.source_id)
-            return self._ingest_database(conn, src, mode=mode, full=full)
+            report = self._ingest_database(conn, src, mode=mode, full=full)
         except sqlite3.Error as exc:
             return ScanReport(
                 source_id=self.source_id,
@@ -163,6 +212,14 @@ class OpenCodeAdapter(Adapter):
             )
         finally:
             src.close()
+        if report.status != "error":
+            save_checkpoint(
+                conn,
+                self.source_id,
+                _DB_FILE_STREAM,
+                fingerprint=file_state,
+            )
+        return report
 
     def _ingest_database(
         self, conn: sqlite3.Connection, src: sqlite3.Connection, *, mode: str, full: bool

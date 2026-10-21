@@ -5,18 +5,26 @@ the keyboard (blocking up to ~100 ms), applies key semantics, and repaints
 only when state changed or the terminal resized. Bitmap charts are emitted
 right after each text diff so draw order stays deterministic (spaces under,
 image above); the graphics payload carries its own positioning.
+
+The rescan runs in its own process: parsing every changed source file is
+seconds of work, and the interface must stay responsive while it happens.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import threading
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import time
+from pathlib import Path
 
+from toknt import _scan
 from toknt.analytics import aggregation
 from toknt.config import AppConfig
 from toknt.presentation import graphics
-from toknt.service import run_scan
 from toknt.storage.database import open_database
 from toknt.tui import views
 from toknt.tui.data import LIVE_WINDOW_DAYS, WINDOWS, Analysis
@@ -29,10 +37,26 @@ DAY_MS = 86_400_000
 MIN_ROWS = 14
 MIN_COLS = 60
 
-#: Live (sub-day) windows rescan themselves in the background: quick first
-#: refresh after switching in, then steadily while the window is open.
+#: How long after switching into a live window the first refresh runs: the
+#: live views should show what just happened, not what was true a minute ago.
 LIVE_FIRST_SCAN_MS = 2_000
-LIVE_SCAN_INTERVAL_MS = 30_000
+
+#: How often the sources are re-read in the background. The scan skips
+#: sources whose files have not changed, so this costs a few milliseconds
+#: when nothing happened and a real read when something did.
+SCAN_INTERVAL_MS = 30_000
+
+#: Historical name (the interval used to be tied to the live windows).
+LIVE_SCAN_INTERVAL_MS = SCAN_INTERVAL_MS
+
+#: The rescan runs in a child process: the same code the command line
+#: uses, and no risk of a child importing (and re-running) the script that
+#: started the TUI. The child's import path is set to *this* package, so a
+#: source checkout and an installed release scan with the same code.
+SCAN_CODE = (
+    "import sys; sys.path.insert(0, {root!r}); "
+    "from toknt._scan import main; main()"
+)
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:
@@ -56,7 +80,9 @@ class App:
         self.ctx = TerminalContext(
             backend=graphics.detect_backend(override=cfg.ui_graphics)
         )
-        self._scan_thread: threading.Thread | None = None
+        self._scan_process: subprocess.Popen | None = None
+        self._scan_log: object | None = None  # the child's stderr
+        self._scan_mark = 0              # scan_runs id before the last scan
         self._scan_done = False          # main loop drains this into a repaint
         self._last_images: dict[int, tuple] = {}  # image_id → placed slot
         # one clock anchor for the whole session: window since-values must be
@@ -64,19 +90,30 @@ class App:
         # windows advance it when a background scan completes, so the window
         # slides forward with fresh data instead of freezing at boot time.
         self._now_ms = int(time.time() * 1000)
-        self._next_auto_scan = self._now_ms + LIVE_SCAN_INTERVAL_MS
+        self._next_auto_scan = self._now_ms + SCAN_INTERVAL_MS
 
     # -- lifecycle -----------------------------------------------------------
 
     def run(self) -> int:
         self.term.enter()
         try:
-            self._probe_terminal()
-            self._refresh_size(force=True)
+            self._boot()
             return self._loop()
         finally:
+            self._stop_scan()
             self.conn.close()
             self.term.leave()
+
+    def _boot(self) -> None:
+        """Prepare the terminal and start the first refresh.
+
+        Every open reads the sources again: the last session may have been
+        hours (or days) ago, and the numbers on screen should be the
+        numbers as of now.
+        """
+        self._probe_terminal()
+        self._refresh_size(force=True)
+        self._start_rescan()
 
     def _probe_terminal(self) -> None:
         """Query cell metrics + background AFTER raw mode (replies hit stdin)."""
@@ -108,18 +145,41 @@ class App:
             event = read_key(self.stdin_fd, poll_wait=0.1)
             if event is not None and self.apply_key(event):
                 dirty = True
+            self._drain_scan()
             if self._scan_done:
                 self._scan_done = False
                 # the corpus changed: slide the clock anchor so live windows
                 # move forward (cache keys shift exactly once per scan)
                 self._now_ms = int(time.time() * 1000)
-                if self._is_live_window():
-                    self._next_auto_scan = self._now_ms + LIVE_SCAN_INTERVAL_MS
+                self._next_auto_scan = self._now_ms + SCAN_INTERVAL_MS
                 dirty = True  # finished scans repaint even without keypresses
             self._maybe_auto_scan()
             if dirty:
                 self.paint()
                 dirty = False
+
+    def _drain_scan(self) -> None:
+        """Pick up a finished scan's result (the main loop's job)."""
+        process = self._scan_process
+        if process is None or process.poll() is None:
+            return  # still running
+        self._scan_process = None
+        self.analysis.invalidate()  # the corpus changed; drop memoized views
+        self.state.scanning = False
+        if process.returncode:
+            reason = self._scan_error()
+            self.state.status = f"scan failed{': ' + reason if reason else ''}"
+        else:
+            inserted = self.conn.execute(
+                "SELECT COALESCE(SUM(events_inserted), 0) FROM scan_runs WHERE id > ?",
+                (self._scan_mark,),
+            ).fetchone()
+            count = int(inserted[0]) if inserted else 0
+            self.state.status = f"scan done: {count} new events"
+        if self._scan_log is not None:
+            self._scan_log.close()
+            self._scan_log = None
+        self._scan_done = True
 
     def _is_live_window(self) -> bool:
         window = WINDOWS[self.state.window]
@@ -159,8 +219,13 @@ class App:
         return True
 
     def _maybe_auto_scan(self) -> None:
-        """Start the background rescan when a live window's tick comes due."""
-        if not self._is_live_window() or self.state.scanning:
+        """Start the background rescan when the tick comes due.
+
+        Every window refreshes: the scan skips the sources whose files have
+        not changed, so a tick on an idle machine costs milliseconds, and a
+        tick while a harness is busy brings in the numbers it just wrote.
+        """
+        if self.state.scanning:
             return
         if time.time() * 1000 >= self._next_auto_scan:
             self._start_rescan()
@@ -189,7 +254,10 @@ class App:
                     self.state.status = ""  # a note about the old view is stale
                     return True
             if char == "t":
-                self.state.window = (self.state.window + 1) % len(WINDOWS)
+                # the window cycle runs backwards: from the default three
+                # days down to a day, an afternoon, a morning, and then on
+                # to everything
+                self.state.window = (self.state.window - 1) % len(WINDOWS)
                 self.state.cursor_day = None
                 self.state.status = ""
                 if self._is_live_window():
@@ -252,36 +320,80 @@ class App:
         self.state.cursor_day = None
         return True
 
-    # -- rescan thread ---------------------------------------------------------
+    # -- rescan process --------------------------------------------------------
 
     def _start_rescan(self) -> None:
+        """Start the rescan in a child process.
+
+        Parsing every changed source file is seconds of work. In a thread
+        that work would hold the GIL and the interface would stutter
+        exactly when the user is looking at fresh numbers, so the scan runs
+        as its own process; the outcome is picked up from the database.
+        """
         if self.state.scanning:
             self.state.status = "scan already running"
             return
         self.state.scanning = True
         self.state.status = "scanning sources…"
-        worker = threading.Thread(target=self._scan_worker, daemon=True)
-        self._scan_thread = worker
-        worker.start()
-
-    def _scan_worker(self) -> None:
-        conn = open_database()
+        self._scan_mark = self._last_scan_run_id()
+        root = str(Path(_scan.__file__).resolve().parent.parent)
+        self._scan_log = tempfile.TemporaryFile()
         try:
-            outcomes = run_scan(conn, full=False, config=self.cfg)
-            changed = sum(
-                (outcome.report.usage_inserted if outcome.report else 0)
-                + (outcome.report.tool_inserted if outcome.report else 0)
-                for outcome in outcomes
+            self._scan_process = subprocess.Popen(
+                [sys.executable, "-c", SCAN_CODE.format(root=root)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=self._scan_log,
+                env={**os.environ, _scan.CONFIG_ENV: json.dumps(self._scan_payload())},
             )
-            status = f"scan done: {changed} new events"
-        except Exception as exc:  # keep the TUI alive even if scanning explodes
-            status = f"scan failed: {type(exc).__name__}"
-        finally:
-            conn.close()
-        self.analysis.invalidate()  # the corpus changed; drop memoized views
+        except OSError as exc:  # no interpreter, no permissions
+            self.state.scanning = False
+            self.state.status = f"scan failed: {type(exc).__name__}"
+            self._scan_process = None
+            self._scan_log.close()
+            self._scan_log = None
+
+    def _scan_error(self) -> str:
+        """The child's last words, when it had any."""
+        if self._scan_log is None:
+            return ""
+        try:
+            self._scan_log.seek(0)
+            text = self._scan_log.read().decode("utf-8", "replace").strip()
+        except OSError:  # pragma: no cover - the log file is gone
+            return ""
+        if not text:
+            return ""
+        last = text.splitlines()[-1].strip()
+        return last[:120]
+
+    def _scan_payload(self) -> dict:
+        """The configuration the child needs to scan exactly our sources."""
+        cfg = self.cfg
+        return {
+            "enabled_harnesses": [str(harness) for harness in cfg.enabled_harnesses],
+            "source_overrides": dict(cfg.source_overrides),
+            "default_since": cfg.default_since,
+            "default_bucket": cfg.default_bucket,
+            "ignore_projects": list(cfg.ignore_projects),
+        }
+
+    def _last_scan_run_id(self) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM scan_runs"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def _stop_scan(self) -> None:
+        """Tear the scan process down (the app is closing)."""
+        process = self._scan_process
+        self._scan_process = None
+        if process is not None and process.poll() is None:
+            process.terminate()
+        if self._scan_log is not None:
+            self._scan_log.close()
+            self._scan_log = None
         self.state.scanning = False
-        self.state.status = status
-        self._scan_done = True
 
     # -- painting --------------------------------------------------------------
 

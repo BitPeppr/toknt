@@ -95,7 +95,7 @@ bottom bar pairs each key with a dim action label.
 | Key                        | Action                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
 | `1`–`4`                    | contributions · tokens by model · tools · sessions                  |
-| `t`                        | cycle window: `3h → 5h → 1d → 3d → 7d → 30d → 90d → 1y → all`    |
+| `t`                        | cycle window: `3d → 1d → 5h → 3h → all → 1y → 90d → 30d → 7d`    |
 | `v`                        | cycle metric: total · input · output · reasoning · cached           |
 | `p`                        | models view: chart unit tokens ⇄ tok/s (derived from message gaps); token charts use a log scale, tok/s stays linear |
 | `m`                        | merge the same model served by different providers (one row each)   |
@@ -105,6 +105,11 @@ bottom bar pairs each key with a dim action label.
 | `?`                        | key reference overlay (the chart underneath stays put)              |
 | `q`, `Ctrl+C`              | quit                                                                |
 
+Every launch **rescans the sources**, so the numbers on screen are the numbers
+as of now, not as of the last time you opened the app. The rescan runs in
+its own process: a source that has not changed is skipped in milliseconds,
+and the interface stays interactive while a busy one is read.
+
 The **3h, 5h and 1d windows are the live views**: the tokens-by-model chart
 switches to hour buckets with clock-time tick labels (`19:00 20:00 …`), and
 the app rescans every source in the background every ~30 seconds (quickly on
@@ -112,6 +117,11 @@ entry, then steadily), sliding the window forward with each completed scan —
 token counts, the donut and the cache-rate bars move on their own while you
 watch. The `‣ scanning…` chip shows when a refresh is in flight; the UI
 stays interactive throughout.
+
+The explorer opens on the **3-day window** and the `t` key walks the cycle
+backwards — `3d → 1d → 5h → 3h → all → 1y → 90d → 30d → 7d` — so the
+shorter, more recent windows are one keystroke away and everything else is
+one keystroke further.
 
 Windows up to a week (`3h`, `5h`, `1d`, `3d`, `7d`) are charted by the
 hour, so the day-scale windows still show the working rhythm instead of a

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,12 @@ from toknt.models.usage import TokenCounts
 from toknt.storage import database, ingestion
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+#: The clock the TUI tests run at. The corpus is stamped at fixed dates
+#: (2-10 October 2026) while the windows are relative to the clock: with a
+#: real clock the corpus would quietly fall out of the window as the
+#: calendar moves on. Everything the views show is then deterministic.
+FIXED_NOW_MS = int(datetime(2026, 10, 12, 12, 0, tzinfo=UTC).timestamp() * 1000)
 
 
 @pytest.fixture
@@ -100,3 +107,28 @@ def seeded_conn(
     ingestion.upsert_usage_events(conn, usage_events)
     ingestion.upsert_tool_events(conn, tool_events)
     return conn
+
+
+@pytest.fixture(autouse=True)
+def pinned_app_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the TUI at a fixed moment, on a window that holds the corpus.
+
+    The explorer opens on a three-day window; the test corpus is stamped
+    days before the pinned clock, so the app under test asks for a wider
+    window. The default itself is asserted where it belongs — on
+    ``AppState``.
+    """
+    from toknt.tui.app import App
+    from toknt.tui.data import WINDOWS
+
+    window = next(
+        index for index, item in enumerate(WINDOWS) if item.label == "30d"
+    )
+    original = App.__init__
+
+    def pinned(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        self._now_ms = FIXED_NOW_MS
+        self.state.window = window
+
+    monkeypatch.setattr(App, "__init__", pinned)

@@ -4,6 +4,30 @@ All notable changes to `toknt` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-10-21
+
+### Changed
+
+- The explorer opens on the **3-day window** (was 90 days): wide enough to
+  show a working week, narrow enough that the charts still say something.
+- The `t` key walks the window cycle **backwards** — `3d → 1d → 5h → 3h →
+  all → 1y → 90d → 30d → 7d` — so the recent windows are one keystroke
+  away and everything else is one keystroke further.
+- **Every launch rescans the sources**, and every window refreshes in the
+  background from now on. A source whose files have not changed is skipped
+  in milliseconds.
+- The rescan runs in **its own process**: reading a busy source no longer
+  stalls the interface while it happens.
+- `python -m toknt` runs the command line interface.
+
+### Fixed
+
+- The OpenCode adapter re-read a seven-day window of messages on every
+  scan — 18k rows of JSON, seconds of work. The window is now six hours
+  (measured against a live corpus: no message was ever finalised later
+  than that), and an unchanged database is not read at all. A refresh of an
+  idle machine went from 2.4 s to 5 ms.
+
 ## [0.1.1] — 2026-10-20
 
 ### Fixed
@@ -37,5 +61,6 @@ coding harnesses.
   gaps with the sources' own reporting schemes.
 - `toknt doctor` for source discovery, coverage and data-quality issues.
 
+[0.2.0]: https://github.com/BitPeppr/toknt/releases/tag/v0.2.0
 [0.1.1]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.1
 [0.1.0]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.0

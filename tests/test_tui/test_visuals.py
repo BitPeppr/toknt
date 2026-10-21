@@ -93,7 +93,7 @@ class TestTitleStatus:
         lines = self._screen(status="x" * 300)
         # the chips must survive intact: a note never evicts them
         assert "harnesses: all" in lines[0]
-        assert "90d" in lines[0]
+        assert "3d" in lines[0]
 
     def test_status_stays_inside_the_page_frame(self) -> None:
         lines = self._screen(columns=120, status="y" * 40)
