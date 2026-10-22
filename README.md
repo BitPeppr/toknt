@@ -30,8 +30,8 @@ tool-call analytics in the terminal:
 - per-harness and per-project token share, plus the day cards (picked day,
   peak day) on the contributions view,
 - model inventory with reported _and_ estimated costs, kept strictly separate,
-- tool-call outcomes with success-rate denominators, rate bars and duration
-  percentiles,
+- tool-call outcomes with success-rate denominators, rate bars and a p90
+  call-duration column,
 - session rankings with per-session token share and outlier flags, with the
   parent/subagent attribution carried into the export,
 - CSV/JSON exports of the canonical records,
@@ -85,32 +85,33 @@ it inspects (**picked day** under the cursor with its per-harness amounts,
 then the **peak day**), while the right rail carries the **window total**
 with its daily average, the **share-by-project** list, the
 **share-by-harness** list (both with inline bars) and a quiet note about the
-harnesses outside the current focus (`· 21 harnesses off (h to cycle)`). On a
-wide screen the rail splits into two columns —
-projects beside harnesses — and project paths show their tail
-(`…/Project/kbd`), which is what tells two projects apart. The bars that carry a series colour paint it on the used portion
-only; the unfilled track is plain space, which respects terminals with a
-transparent background (halftone shade characters puddle into noise there)
-and reads as less ink everywhere.
-Narrow terminals fold back to a single column, and
-the legend there names the harnesses that carry data as colored swatches,
-keeps the ones outside the focus visible (`· codex (off)`) and collapses the
-idle ones into a single `· +N idle` tail. A compact tab bar (view chips,
-window/metric/harness state) marks the active view in its series color; the
-bottom bar pairs each key with a dim action label.
+harnesses outside the current focus (`· 21 harnesses off (h to cycle)`).
+On a wide screen the rail splits into two columns — projects beside
+harnesses — and project paths show their tail (`…/Project/kbd`), which is
+what tells two projects apart. The bars that carry a series colour paint it
+on the used portion only; the unfilled track is plain space, which respects
+terminals with a transparent background (halftone shade characters puddle
+into noise there) and reads as less ink everywhere. Narrow terminals fold
+back to a single column, and the legend there names the harnesses that
+carry data as colored swatches, keeps the ones outside the focus visible
+(`· codex (off)`) and collapses the idle ones into a single `· +N idle`
+tail. A compact tab bar (view chips, window/metric/harness state) marks the
+active view in its series color; the bottom bar pairs each key with a dim
+action label.
 
-| Key                        | Action                                                              |
-| -------------------------- | ------------------------------------------------------------------- |
-| `1`–`4`                    | contributions · tokens by model · tools · sessions                  |
-| `t`                        | cycle window: `3d → 1d → 5h → 3h → all → 1y → 90d → 30d → 7d`    |
-| `v`                        | cycle metric: total · input · output · reasoning · cached           |
-| `p`                        | models view: chart unit tokens ⇄ tok/s (derived from message gaps); token charts use a log scale, tok/s stays linear |
-| `m`                        | merge the same model served by different providers (one row each)   |
-| `h`                        | isolate one harness at a time: all → each (that has data) → all   |
-| `←` `→` `↑` `↓`            | move the day cursor (contributions) or table selection              |
-| `r`                        | rescan all sources in the background, then show fresh data          |
-| `?`                        | key reference overlay (the chart underneath stays put)              |
-| `q`, `Ctrl+C`              | quit                                                                |
+| Key             | Action                                                             |
+| --------------- | ------------------------------------------------------------------ |
+| `1`–`4`         | contributions · tokens by model · tools · sessions                 |
+| `t`             | cycle window: `3d → 1d → 5h → 3h → all → 1y → 90d → 30d → 7d`      |
+| `v`             | cycle metric: total · input · output · reasoning · cached          |
+| `p`             | models view: chart unit tokens ⇄ tok/s (derived from message gaps) |
+| `m`             | merge the same model served by different providers (one row each)  |
+| `h`             | isolate one harness at a time: all → each (that has data) → all    |
+| `←` `→` `↑` `↓` | move the day cursor (contributions) or table selection             |
+| `r`             | rescan all sources in the background, then show fresh data         |
+| `g`             | graphics self-test (same test image as `toknt graphics`)           |
+| `?`             | key reference overlay (the chart underneath stays put)             |
+| `q`, `Ctrl+C`   | quit                                                               |
 
 Every launch **rescans the sources**, so the numbers on screen are the numbers
 as of now, not as of the last time you opened the app. The rescan runs in
@@ -184,22 +185,24 @@ Generated tokens follow the source's own reporting scheme, because the
 categories mean different things: an Anthropic-style source reports
 reasoning *beside* output, so both count; an OpenAI-style source reports
 reasoning *inside* output, so counting it again would inflate the rate by
-tens of percent on reasoning-heavy models. Prompt handling (input and
-cache) is never part of what a rate measures. The pairing excludes a
-session's first message, gaps longer than five minutes (a person's lunch is
-not model slowness), and messages that report no generated tokens, so those
-events hand their predecessor's gap to whoever follows. Events without
-session attribution have no conversation to pair within and drop out of
-every rate. In the weighting, a slow message biases its day more than a
-fast burst, which matches what the wall clock actually spent. Accuracy
-depends on the work: tool-free bursts land closest to a model's true output
-speed, while turns dominated by long tool runs bias the rate down, because
-the wall clock between messages includes the tools. toknt has no way to
-measure a true duration, so treat the comparisons between models and the
-trends over time as the signal — never a single number as gospel. In
-interactive mode the estimate lives behind `p` on the models view (chart)
-and the table's `tok/s` column; on the command line it is
-`toknt models --tps`.
+tens of percent on reasoning-heavy models. Gemini CLI and Qwen Code are the
+exception: they report thoughts additively, so their stored reasoning is
+deliberately not added to the rate — on thought-heavy turns the rate reads
+slightly low rather than double counting. Prompt handling (input and cache)
+is never part of what a rate measures. The pairing excludes a session's
+first message, gaps longer than five minutes (a person's lunch is not model
+slowness), and messages that report no generated tokens, so those events
+hand their predecessor's gap to whoever follows. Events without session
+attribution have no conversation to pair within and drop out of every rate.
+In the weighting, a slow message biases its day more than a fast burst,
+which matches what the wall clock actually spent. Accuracy depends on the
+work: tool-free bursts land closest to a model's true output speed, while
+turns dominated by long tool runs bias the rate down, because the wall
+clock between messages includes the tools. toknt has no way to measure a
+true duration, so treat the comparisons between models and the trends over
+time as the signal — never a single number as gospel. In interactive mode
+the estimate lives behind `p` on the models view (chart) and the table's
+`tok/s` column; on the command line it is `toknt models --tps`.
 
 ### Merging models across providers
 
@@ -323,7 +326,7 @@ Period options accept `30d`, `12h`, `8w`, `today`, calendar dates
 | `toknt scan [--full]`             | incremental import; `--full` reindexes and reconciles deleted rows                                                                                                                                                           |
 | `toknt usage`                     | token series: `--by model\|harness\|project` (`agent` kept as an alias), `--metric total\|input\|output\|reasoning\|cache_read\|cache_write\|cached\|requests`, `--bucket hour\|day\|week`, `--chart line\|bar\|stacked\|none`, `--cumulative`, `--top N`, `--merge-models` |
 | `toknt models`                    | per-model requests, tokens, reported and estimated cost; `--tps` adds the tok/s column, `--merge-models` merges spellings, `--top N` limits the chart                                                          |
-| `toknt tools`                     | per-tool calls, success rate (known outcomes only), duration percentiles; `--chart rate\|trend\|none`, `--limit`                                                                                                                 |
+| `toknt tools`                     | per-tool calls, success rate (known outcomes only), p90 duration; `--chart rate\|trend\|none`, `--limit`                                                                                                                        |
 | `toknt sessions`                  | sessions ranked by usage, `!` outliers, `--limit`                                                                                                                                                                            |
 | `toknt export`                    | `--what usage\|tools\|sessions --format csv\|json` to stdout                                                                                                                                                                 |
 | `toknt doctor`                    | configuration, detected/ingested sources, table counts, quality issues, pricing hint                                                                                                                                         |
@@ -346,8 +349,8 @@ stores a `token_scheme` and totals are computed per scheme:
 
 | Scheme                                                | How tokens add up                                     | Notes                                                                  |
 | ----------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------- |
-| `anthropic` (OpenCode, Claude Code, Cline, pi, Amp)   | input + output + reasoning + cache_read + cache_write | cache reads/writes are _separate_ from input; reasoning is inside output (structural zero) |
-| `openai` (Codex CLI, TRAE, Gemini CLI, Qwen, Grok)    | input + output                                        | cached input is a **subset** of input; reasoning is a subset of output |
+| `anthropic` (OpenCode, Claude Code, Cline, pi, Amp)   | input + output + reasoning + cache_read + cache_write | cache reads/writes are _separate_ from input; reasoning is a separate category for OpenCode, a structural zero for Claude Code, Cline, pi and Amp (billed inside output) |
+| `openai` (Codex CLI, TRAE, Gemini CLI, Qwen, Grok)    | input + output                                        | cached input is a **subset** of input; reasoning is a subset of output for Codex, but additive thoughts for Gemini/Qwen (flagged `provider_total_mismatch`) |
 
 Source-specific rules enforced by the adapters:
 
@@ -422,8 +425,8 @@ otherwise on macOS, XDG on Linux), or point `TOKNT_CONFIG` anywhere:
 
 ```toml
 [general]
-since = "30d"        # default window for all commands
-bucket = "day"       # hour | day | week
+since = "30d"        # default --since for the CLI (the explorer opens on 3d)
+bucket = "day"       # default --bucket: hour | day | week
 
 [adapters]
 enabled = ["opencode", "codex", "claude_code"]   # [] disables scanning entirely
@@ -480,11 +483,12 @@ outputs, file contents, credentials.
 
 ## Performance
 
-`toknt` reads sources incrementally (checkpoints with byte offsets and
-fingerprints for JSONL, per-source watermarks for SQLite) and indexes
-SQLite for timestamp/model/session/agent/tool queries. Unchanged sources are
-skipped by a stat check: a JSONL file by its size and mtime, a SQLite source
-by the size and mtime of its database and write-ahead log.
+`toknt` reads sources incrementally (per-file checkpoints with byte offsets
+and fingerprints for the JSONL/JSON stores) and indexes SQLite for
+timestamp/model/session/agent/tool queries. Unchanged sources are skipped
+by a stat check before any parsing — file size and mtime, and for
+OpenCode's database the size and mtime of the database and its write-ahead
+log — so an unchanged store costs a handful of `stat` calls, never a read.
 
 `tests/test_performance.py` builds a synthetic six-month history — three
 harnesses, 30k usage events and 15k tool calls, including duplicate legacy
@@ -498,8 +502,8 @@ and measures (Apple Silicon laptop, SSD, 2026-10):
 | Incremental scan after appending a small batch per agent                       | ~0.1 s    |
 | Analytics queries (daily series, tool outcomes, cost estimate over 30k events) | ~1 s      |
 
-On the development machine the live corpus is ~22k OpenCode events in a
-510 MB database: a warm scan of it takes 0.4 s (almost all of it the
+On the development machine the live corpus is ~23k OpenCode events in a
+507 MB database: a warm scan of it takes 0.4 s (almost all of it the
 interpreter start — the scan itself is milliseconds, because the source did
 not change), and a full reindex of everything takes ~12 s. Synthetic JSON
 payloads are compact, so treat the cold-scan figure as a lower bound. Run
@@ -542,7 +546,7 @@ totals.
 
 ```bash
 uv sync                        # create the venv and install dependencies
-uv run pytest                  # full suite (hermetic; never reads real history)
+uv run pytest                  # full suite (synthetic fixtures; live-corpus tests run only where a store exists)
 uv run pytest tests/test_performance.py -s -q   # benchmark with timings
 uv run ruff check .            # lint
 uv run toknt doctor            # inspect local database and source detection
@@ -553,4 +557,4 @@ Test fixtures are synthetic and sanitized (`tests/fixtures`,
 family, dedupe and rescans, truncated/replaced files, subagents, outcome
 correlation, pricing strictness, timezone/bucket boundaries, exports and CLI
 behavior on empty databases. Milestones and their completion gates are
-recorded in `plan.md`.
+recorded in `Plan.md`.

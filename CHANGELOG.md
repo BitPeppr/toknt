@@ -4,6 +4,23 @@ All notable changes to `toknt` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-10-22
+
+### Fixed
+
+- A second read of the README caught what the first pass missed: the tools
+  view reports a **p90** call duration (not "duration percentiles"), the `g`
+  key was missing from the key table, the token-scheme notes were wrong for
+  OpenCode (reasoning is a separate category there, not a structural zero)
+  and for Gemini/Qwen (thoughts are additive, not inside output), the tok/s
+  rate's treatment of those thoughts is now stated, `[general] since` is
+  described as the CLI default (the explorer ignores it), the performance
+  section now describes the skip check accurately (size + mtime everywhere,
+  database plus write-ahead log for OpenCode) instead of claiming watermarks
+  for every SQLite store, the test suite is no longer called "hermetic"
+  (live-corpus tests read real stores when present), and `Plan.md` is
+  spelled with its actual case.
+
 ## [0.2.1] — 2026-10-22
 
 ### Fixed
@@ -73,6 +90,7 @@ coding harnesses.
   gaps with the sources' own reporting schemes.
 - `toknt doctor` for source discovery, coverage and data-quality issues.
 
+[0.2.2]: https://github.com/BitPeppr/toknt/releases/tag/v0.2.2
 [0.2.1]: https://github.com/BitPeppr/toknt/releases/tag/v0.2.1
 [0.2.0]: https://github.com/BitPeppr/toknt/releases/tag/v0.2.0
 [0.1.1]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.1
