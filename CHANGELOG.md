@@ -4,6 +4,18 @@ All notable changes to `toknt` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-10-22
+
+### Fixed
+
+- The README was audited against the code and corrected where it had drifted:
+  the harness count (22, not 21), the window cycle and the default window,
+  the rescan behaviour, the command reference (`toknt graphics` was missing),
+  the period options (`today`), the quality-issue codes, the source-support
+  table (which harnesses are regression-tested against a live corpus), the
+  privacy list (call durations and tool categories), the performance figures
+  (re-measured) and the sixel terminal list.
+
 ## [0.2.0] — 2026-10-21
 
 ### Changed
@@ -61,6 +73,7 @@ coding harnesses.
   gaps with the sources' own reporting schemes.
 - `toknt doctor` for source discovery, coverage and data-quality issues.
 
+[0.2.1]: https://github.com/BitPeppr/toknt/releases/tag/v0.2.1
 [0.2.0]: https://github.com/BitPeppr/toknt/releases/tag/v0.2.0
 [0.1.1]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.1
 [0.1.0]: https://github.com/BitPeppr/toknt/releases/tag/v0.1.0

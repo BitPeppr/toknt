@@ -8,7 +8,7 @@
 
 Local-first usage analytics for AI coding harnesses. `toknt` reads the native
 telemetry of **OpenCode**, **OpenAI Codex CLI**, **Claude Code**, **Cline**,
-**pi**, **Grok Build**, **Gemini CLI** and more (21 harnesses, see
+**pi**, **Grok Build**, **Gemini CLI** and more (22 harnesses, see
 [Source support](#source-support)) from your machine, normalizes it into a
 canonical model, keeps a local SQLite index, and renders token, cost and
 tool-call analytics in the terminal:
@@ -16,8 +16,12 @@ tool-call analytics in the terminal:
 - **an interactive TUI** — booting into a GitHub-style contribution graph of
   tokens per day, with per-model series, a token-share donut, cache-hit-rate
   bars, tool outcomes and session rankings one keypress away,
-- **live 3h/5h/1d views** — hour-bucketed model charts with an auto-rescanning
-  background scan, for watching token counts accumulate in near real time,
+- **a rescan on every launch** — the sources are read again when the explorer
+  opens and every ~30 seconds after that, in a child process, so the numbers
+  on screen are the numbers as of now and the interface never waits for them,
+- **hour-bucketed live views** — the 3h, 5h and 1d windows chart by the hour
+  with clock-time tick labels, for watching token counts accumulate in near
+  real time,
 - **true image charts** — anti-aliased, high-fidelity graphics via the
   kitty / iTerm2 / sixel protocols where the terminal supports them
   (previously-impossible resolution: no botched character cells),
@@ -28,8 +32,8 @@ tool-call analytics in the terminal:
 - model inventory with reported _and_ estimated costs, kept strictly separate,
 - tool-call outcomes with success-rate denominators, rate bars and duration
   percentiles,
-- session rankings with per-session token share, outlier flags and
-  parent/subagent attribution,
+- session rankings with per-session token share and outlier flags, with the
+  parent/subagent attribution carried into the export,
 - CSV/JSON exports of the canonical records,
 - `toknt doctor` for source discovery, coverage and data-quality issues.
 
@@ -80,8 +84,9 @@ terminals the page splits in two: the left holds the calendar and the days
 it inspects (**picked day** under the cursor with its per-harness amounts,
 then the **peak day**), while the right rail carries the **window total**
 with its daily average, the **share-by-project** list, the
-**share-by-harness** list (both with inline bars) and a quiet note about
-toggled-off harnesses. On a wide screen the rail splits into two columns —
+**share-by-harness** list (both with inline bars) and a quiet note about the
+harnesses outside the current focus (`· 21 harnesses off (h to cycle)`). On a
+wide screen the rail splits into two columns —
 projects beside harnesses — and project paths show their tail
 (`…/Project/kbd`), which is what tells two projects apart. The bars that carry a series colour paint it on the used portion
 only; the unfilled track is plain space, which respects terminals with a
@@ -89,8 +94,8 @@ transparent background (halftone shade characters puddle into noise there)
 and reads as less ink everywhere.
 Narrow terminals fold back to a single column, and
 the legend there names the harnesses that carry data as colored swatches,
-keeps toggled-off ones visible (`codex (off)`) and collapses the idle ones
-into a single `+N idle` tail. A compact tab bar (view chips,
+keeps the ones outside the focus visible (`· codex (off)`) and collapses the
+idle ones into a single `· +N idle` tail. A compact tab bar (view chips,
 window/metric/harness state) marks the active view in its series color; the
 bottom bar pairs each key with a dim action label.
 
@@ -112,13 +117,14 @@ as of now, not as of the last time you opened the app. The rescan runs in
 its own process: a source that has not changed is skipped in milliseconds,
 and the interface stays interactive while a busy one is read.
 
-The **3h, 5h and 1d windows are the live views**: the tokens-by-model chart
-switches to hour buckets with clock-time tick labels (`19:00 20:00 …`), and
-the app rescans every source in the background every ~30 seconds (quickly on
-entry, then steadily), sliding the window forward with each completed scan —
-token counts, the donut and the cache-rate bars move on their own while you
-watch. The `‣ scanning…` chip shows when a refresh is in flight; the UI
-stays interactive throughout.
+The **3h, 5h and 1d windows are the hour-bucketed ones**: the
+tokens-by-model chart switches to hour buckets with clock-time tick labels
+(`19:00 20:00 …`), which is what makes them worth watching. Every window
+refreshes in the background every ~30 seconds, and the live ones refresh
+within two seconds of arriving at them — the window slides forward with
+each completed scan, so token counts, the donut and the cache-rate bars
+move on their own while you watch. The `‣ scanning…` chip shows when a
+refresh is in flight; the UI stays interactive throughout.
 
 The explorer opens on the **3-day window** and the `t` key walks the cycle
 backwards — `3d → 1d → 5h → 3h → all → 1y → 90d → 30d → 7d` — so the
@@ -150,6 +156,18 @@ the same models in the same order (only the lines move, never the colours).
 Token charts use a **logarithmic y-axis** — a 5M-token model stays legible
 next to a 250M one instead of collapsing into the baseline — while the
 tok/s chart stays linear, because a rate is a ratio, not a magnitude.
+The **tools view** (`3`) is a table of every tool the harnesses called:
+tool, category, call count, and — where the zone is wide enough — the
+outcome columns `ok`, `fail`, `deny`, `cancel` and `unknown`, a success rate
+and a rate bar. The rate is computed from **known outcomes only**: pending
+and unknown calls stay visible in the `unknown` column but never enter the
+denominator, so a rate can never flatter the data. The **sessions view**
+(`4`) ranks sessions by the selected metric with a `vs max` bar, adds the
+event and tool counts where the zone is wide enough, and names the session
+under the cursor (harness, project, models, duration) in the line above the
+key bar. The `!` outlier marker belongs to `toknt sessions` on the command
+line.
+
 Piping or scripting (non-tty stdout) gets the old static print; `toknt
 overview` forces that dashboard, and `TOKNT_TUI=0` disables the
 interactive boot entirely.
@@ -217,7 +235,8 @@ totals, event counts, sessions and reported cost stay consistent.
 When the terminal understands an image protocol, the models chart and the
 token-share donut are rendered as anti-aliased bitmaps — soft-edged strokes,
 transparent background, gridlines — and placed inline (kitty:
-kitty/ghostty/WezTerm/Warp/rio, iTerm2: OSC 1337, sixel: xterm/foot).
+kitty/ghostty/WezTerm/Warp/rio, iTerm2: OSC 1337, sixel: xterm/foot, and
+the st/mintty terminals that advertise sixel).
 Identical charts are re-rendered from a small cache, so navigating never
 re-encodes the bitmap; when an image's slot disappears (view switch, smaller
 window) it is erased with the terminal's own background color, so no ghost
@@ -264,13 +283,13 @@ opened read-only and never modified.
 
 | Harness                                           | Default location                                                                             | Status                                                            |
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| OpenCode                                          | `~/.local/share/opencode` (or `OPENCODE_DATA_DIR`, `XDG_DATA_HOME`)                          | validated against real data (2026-10)                              |
+| OpenCode                                          | `~/.local/share/opencode` (or `OPENCODE_DATA_DIR`, `XDG_DATA_HOME`)                          | live corpus, regression-tested (2026-10)                           |
 | Codex CLI                                         | `~/.codex/sessions` (or `CODEX_HOME`)                                                        | validated against real data (2026-10)                              |
 | Claude Code                                       | `~/.claude/projects` (or `CLAUDE_CONFIG_DIR`)                                                | fixtures only (not installed on the dev machine)                   |
-| Cline (CLI)                                       | `~/.cline/data/sessions` (or `CLINE_DATA_DIR`)                                               | validated against real data (2026-10)                              |
+| Cline (CLI)                                       | `~/.cline/data/sessions` (or `CLINE_DATA_DIR`)                                               | live corpus, regression-tested (2026-10)                           |
 | Cline / Roo Code / Kilo Code (VS Code)            | `<globalStorage>/<ext id>/tasks` across Code/Insiders/VSCodium/Cursor/Windsurf hosts         | documented format; sessions + tools (the format carries no tokens) |
-| pi                                                | `~/.pi/agent/sessions`                                                                       | validated against real data (2026-10)                              |
-| Grok Build                                        | `~/.grok/sessions` (or `GROK_HOME`)                                                          | validated against real data (2026-10)                              |
+| pi                                                | `~/.pi/agent/sessions`                                                                       | live corpus, regression-tested (2026-10)                           |
+| Grok Build                                        | `~/.grok/sessions` (or `GROK_HOME`)                                                          | live corpus, regression-tested (2026-10)                           |
 | Command Code                                      | `~/.commandcode/projects`                                                                    | Claude-shaped transcripts; fixtures only                           |
 | CodeBuddy Code / ZCode                            | `~/.codebuddy/projects`, `~/.zcode/projects`                                                 | Claude-shaped transcripts; fixtures only                           |
 | TRAE CLI                                          | `~/.trae/cli/sessions` (or `TRAE_HOME`)                                                      | Codex-shaped rollouts; fixtures only                               |
@@ -293,9 +312,9 @@ Config: `[adapters] enabled = [...]` accepts any of the harness ids above
 
 ## Commands
 
-Period options accept `30d`, `12h`, `8w`, calendar dates (`2026-10-01`) and
-`all`; `--harness` (alias `--agent`), `--model` and `--project` filters
-repeat.
+Period options accept `30d`, `12h`, `8w`, `today`, calendar dates
+(`2026-10-01`) and `all`; `--harness` (alias `--agent`), `--model` and
+`--project` filters repeat.
 
 | Command                           | What it does                                                                                                                                                                                                                 |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -303,11 +322,12 @@ repeat.
 | `toknt overview`                  | static overview dashboard: totals, per-day chart by model, model and tool tables; `--merge-models`                                                                 |
 | `toknt scan [--full]`             | incremental import; `--full` reindexes and reconciles deleted rows                                                                                                                                                           |
 | `toknt usage`                     | token series: `--by model\|harness\|project` (`agent` kept as an alias), `--metric total\|input\|output\|reasoning\|cache_read\|cache_write\|cached\|requests`, `--bucket hour\|day\|week`, `--chart line\|bar\|stacked\|none`, `--cumulative`, `--top N`, `--merge-models` |
-| `toknt models`                    | per-model requests, tokens, reported and estimated cost                                                                                                                                                                      |
-| `toknt tools`                     | per-tool calls, success rate (known outcomes only), `--limit`                                                                                                                                                                |
+| `toknt models`                    | per-model requests, tokens, reported and estimated cost; `--tps` adds the tok/s column, `--merge-models` merges spellings, `--top N` limits the chart                                                          |
+| `toknt tools`                     | per-tool calls, success rate (known outcomes only), duration percentiles; `--chart rate\|trend\|none`, `--limit`                                                                                                                 |
 | `toknt sessions`                  | sessions ranked by usage, `!` outliers, `--limit`                                                                                                                                                                            |
 | `toknt export`                    | `--what usage\|tools\|sessions --format csv\|json` to stdout                                                                                                                                                                 |
 | `toknt doctor`                    | configuration, detected/ingested sources, table counts, quality issues, pricing hint                                                                                                                                         |
+| `toknt graphics`                  | draws a test chart to check whether the terminal shows images; `--backend kitty\|iterm2\|sixel\|off`                                                                                                                           |
 | `toknt pricing list\|add\|remove` | per-model prices for cost estimates                                                                                                                                                                                          |
 
 Examples:
@@ -438,10 +458,11 @@ directory, `~/Library/Application Support/toknt/toknt.db` on macOS).
   same defect is never counted twice, different affected records are added
   up, and a `toknt scan --full` refreshes them instead of accumulating.
 
-Quality codes: `unparsable_row`, `unreadable_file`, `missing_usage`,
-`missing_token_info`, `orphan_tool_output`, `orphan_tool_result`,
-`scan_failed`. When a source was last scanned with status `partial` or
-`error`, doctor suggests `toknt scan --full` to rebuild it from scratch.
+Quality codes: `unparsable_row`, `unparsable_file`, `unreadable_file`,
+`api_error_messages`, `missing_usage`, `missing_token_info`,
+`orphan_tool_output`, `orphan_tool_result`, `scan_failed`. When a source was
+last scanned with status `partial` or `error`, doctor suggests
+`toknt scan --full` to rebuild it from scratch.
 
 Tool success rates use only calls with a known final outcome; `pending` and
 `unknown` calls are excluded from the denominator and stay visible in the
@@ -452,7 +473,8 @@ yet, which is the same "not a known outcome" bucket.)
 ## Privacy
 
 Stored per event: timestamps, token counts, cost fields, model/provider/agent
-ids, project paths, session ids, tool names, outcome status and quality notes.
+ids, project paths, session ids, tool names and categories, call durations,
+outcome status and quality notes.
 **Never** stored: prompt bodies, model responses, tool arguments, tool
 outputs, file contents, credentials.
 
@@ -460,8 +482,9 @@ outputs, file contents, credentials.
 
 `toknt` reads sources incrementally (checkpoints with byte offsets and
 fingerprints for JSONL, per-source watermarks for SQLite) and indexes
-SQLite for timestamp/model/session/agent/tool queries. Unchanged files are
-skipped by a stat check.
+SQLite for timestamp/model/session/agent/tool queries. Unchanged sources are
+skipped by a stat check: a JSONL file by its size and mtime, a SQLite source
+by the size and mtime of its database and write-ahead log.
 
 `tests/test_performance.py` builds a synthetic six-month history — three
 harnesses, 30k usage events and 15k tool calls, including duplicate legacy
@@ -470,26 +493,29 @@ and measures (Apple Silicon laptop, SSD, 2026-10):
 
 | Scenario                                                                       | Wall time |
 | ------------------------------------------------------------------------------ | --------- |
-| Cold scan (everything, all agents)                                             | ≈2 s      |
-| Warm scan (no changes)                                                         | ~0.07 s   |
-| Incremental scan after appending a small batch per agent                       | ~0.07 s   |
-| Analytics queries (daily series, tool outcomes, cost estimate over 30k events) | ~0.5 s    |
+| Cold scan (everything, all agents)                                             | ≈4 s      |
+| Warm scan (no changes)                                                         | ~0.03 s   |
+| Incremental scan after appending a small batch per agent                       | ~0.1 s    |
+| Analytics queries (daily series, tool outcomes, cost estimate over 30k events) | ~1 s      |
 
-Real-machine full rescan of ~20k OpenCode events with full-size payloads plus
-the Codex rollouts takes ≈5 s; synthetic JSON payloads are compact, so treat
-cold-scan figures as a lower bound. Run `uv run pytest tests/test_performance.py -s -q`
-to reproduce; the test also asserts per-agent row counts exactly, so repeated
-scans can never inflate totals.
+On the development machine the live corpus is ~22k OpenCode events in a
+510 MB database: a warm scan of it takes 0.4 s (almost all of it the
+interpreter start — the scan itself is milliseconds, because the source did
+not change), and a full reindex of everything takes ~12 s. Synthetic JSON
+payloads are compact, so treat the cold-scan figure as a lower bound. Run
+`uv run pytest tests/test_performance.py -s -q` to reproduce; the test also
+asserts per-agent row counts exactly, so repeated scans can never inflate
+totals.
 
 ## Known limitations
 
 - **Claude Code** and the fixture-validated harnesses above are covered by
   synthetic tests only (see the source-support table); treat their numbers as
-  best effort until verified on a machine with real transcripts. The three
-  harnesses marked "validated against real data" are regression-tested
-  against the live corpus on the development machine in
-  `tests/test_adapters/test_live_harnesses.py` (skipped automatically when a
-  store is absent).
+  best effort until verified on a machine with real transcripts. The four
+  harnesses marked "live corpus, regression-tested" — OpenCode, Cline, pi and
+  Grok Build — are checked against the live corpus on the development machine
+  in `tests/test_adapters/test_live_harnesses.py` (skipped automatically when
+  a store is absent).
 - Harnesses whose formats carry no token counts (Kiro, Cline's VS Code task
   dirs, Goose) show sessions and tool outcomes but no token/cost figures —
   by design, never estimated.
